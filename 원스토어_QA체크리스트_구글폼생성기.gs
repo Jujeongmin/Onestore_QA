@@ -20,6 +20,10 @@
  * 쓰는 법 / How to run
  *  1. https://script.google.com 접속 → "새 프로젝트"
  *  2. 편집기 내용 전부 지우고 이 파일 전체를 붙여넣기
+ *  2-1. 왼쪽 "파일 +" 로 스크립트 파일을 하나 더 만들고(이름 아무거나),
+ *       원스토어_QA체크리스트_이미지데이터.gs 내용을 통째로 붙여넣기.
+ *       비개발자용 설명 다이어그램 4장이 base64 PNG로 들어 있음 — 외부 호스팅 불필요.
+ *       이 파일을 안 넣어도 폼은 정상 생성되고 이미지만 빠진다(아래 addImage가 조용히 건너뜀).
  *  3. 상단 함수 목록에서 createQaChecklistForm 선택 → "실행"
  *  4. 최초 1회 권한 승인 (Google 폼 + 스프레드시트 생성 권한)
  *  5. 실행 로그에 나오는 링크 3개 확인
@@ -109,6 +113,26 @@ function createQaChecklistForm() {
     // 섹션 헤더는 열을 차지하지 않는다.
   };
 
+  /**
+   * 설명 다이어그램. 개발을 모르는 제작자가 문항을 한눈에 이해하도록 문항 바로
+   * 앞에 그림을 깐다. 이미지 항목도 응답을 받지 않으므로 열을 차지하지 않는다.
+   *
+   * base64는 이미지데이터.gs 에 들어 있다. 그 파일을 안 붙여넣었으면 상수가
+   * 정의되지 않으므로(typeof 검사) 그림만 빠지고 폼 생성은 그대로 진행된다.
+   */
+  var addImage = function (b64, name, altTitle) {
+    if (!b64) {
+      Logger.log('이미지 건너뜀 / image skipped: ' + name + ' (이미지데이터 파일 미포함)');
+      return;
+    }
+    var blob = Utilities.newBlob(Utilities.base64Decode(b64), 'image/png', name + '.png');
+    form.addImageItem()
+      .setImage(blob)
+      .setTitle(altTitle)
+      .setAlignment(FormApp.Alignment.CENTER)
+      .setWidth(600);
+  };
+
   // ---------- 제출 정보 / Submission info ----------
   addHeader('제출 정보 / Submission info');
 
@@ -184,6 +208,11 @@ function createQaChecklistForm() {
   );
 
   // 1. 광고 + VX 동시 탑재 (게이트)
+  addImage(
+    typeof IMG_ENTRY_POINTS !== 'undefined' ? IMG_ENTRY_POINTS : null,
+    'entry_points',
+    '참고 그림 — 광고 진입점과 결제 진입점이란? / Reference — what counts as an ad or purchase entry point'
+  );
   addChoice(
     '1. 광고 + VX 결제 동시 탑재  ·  Both ads and VX purchases are present',
     '[KO] 이 항목이 먼저인 이유: 광고나 결제가 애초에 안 붙어있으면 아래 2~5번(타임아웃·보상·결제창)은 테스트 자체가 성립하지 않음.\n' +
@@ -246,6 +275,11 @@ function createQaChecklistForm() {
   );
 
   // 4. 계정 저장 (AI 재현 불가 → 증빙)
+  addImage(
+    typeof IMG_ACCOUNT_SAVE !== 'undefined' ? IMG_ACCOUNT_SAVE : null,
+    'account_save',
+    '참고 그림 — 계정 단위 저장 vs 기기에만 저장 / Reference — account-bound vs device-only saves'
+  );
   addChoice(
     '4. 계정 단위 데이터 저장  ·  Data saved per account, not per device',
     '[KO] 왜: 로컬 저장과 계정(서버) 저장이 섞이면 기기 변경·재설치 시 진행 상황을 잃음.\n' +
@@ -303,6 +337,11 @@ function createQaChecklistForm() {
   );
 
   // 7. 화면 방향
+  addImage(
+    typeof IMG_ORIENTATION !== 'undefined' ? IMG_ORIENTATION : null,
+    'orientation',
+    '참고 그림 — 화면 방향 지원 모드 세 가지 / Reference — the three orientation modes'
+  );
   addChoice(
     '7-1. 이 게임의 화면 방향 지원 모드  ·  Which orientation does this game support?',
     '[KO] 먼저 이 게임이 어느 모드로 기획됐는지 선택. 다음 문항(7-2)에서 실제 동작이 그 선택과 일치하는지 확인함. ' +
@@ -325,6 +364,11 @@ function createQaChecklistForm() {
   );
 
   // 8. 게임 내 언어
+  addImage(
+    typeof IMG_LANGUAGE !== 'undefined' ? IMG_LANGUAGE : null,
+    'language',
+    '참고 그림 — 언어를 바꾸면 레이아웃도 바뀐다 / Reference — switching language also changes layout'
+  );
   addChoice(
     '8. 게임 내 언어(한국어/영어) UI 지원  ·  In-game UI supports both Korean and English',
     '[KO] 왜: 6번 Description과 별개. 그건 스토어 소개글, 이건 게임 실행 중 화면 안 텍스트.\n' +
