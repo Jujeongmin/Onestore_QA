@@ -503,7 +503,21 @@ function moveExistingFormDestination() {
   }
   if (!formUrl) throw new Error('이 시트에 연결된 폼을 못 찾았다. ID를 확인할 것.');
 
-  var form = FormApp.openByUrl(formUrl);
+  // 폼을 못 열면 권한 문제다. 어느 폼인지 먼저 찍어두면 소유자 확인이 쉽다.
+  Logger.log('연결된 폼 주소 / Linked form: ' + formUrl);
+
+  var form;
+  try {
+    form = FormApp.openByUrl(formUrl);
+  } catch (e) {
+    throw new Error(
+      '폼을 열 수 없다 — 지금 로그인한 계정에 이 폼의 편집 권한이 없다.\n' +
+      '폼 주소: ' + formUrl + '\n' +
+      '해결: 폼 소유자 계정으로 이 스크립트를 실행하거나, 폼 소유자가 이 계정을 편집자로 추가할 것.\n' +
+      '(스크립트 없이 폼 편집화면 → 응답 → ⋮ → "응답 대상 선택"으로도 같은 작업이 가능하다)\n' +
+      '원본 오류: ' + e.message
+    );
+  }
   form.setDestination(FormApp.DestinationType.SPREADSHEET, RESPONSE_SPREADSHEET_ID);
   SpreadsheetApp.flush();
 
