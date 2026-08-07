@@ -39,6 +39,16 @@
  * 사유를 적는다.
  */
 
+/**
+ * 응답을 받을 스프레드시트 ID.
+ * 비워두면('') 실행할 때마다 새 스프레드시트를 만든다.
+ * 값을 넣으면 그 스프레드시트에 응답 탭이 새로 생긴다.
+ *
+ * 주의: 시트 안의 "특정 탭"을 지정할 수는 없다. 구글이 항상 새 탭을 만든다.
+ * ID는 URL의 /d/ 와 /edit 사이 문자열이다.
+ */
+var RESPONSE_SPREADSHEET_ID = '1djUhtImOZdvaZb1tvGJHheoZ2L3s4LHCnCWhz0gLRmo';
+
 function createQaChecklistForm() {
   var form = FormApp.create('Verse8 · 원스토어 출시 전 QA 체크리스트 / Pre-release QA Checklist');
 
@@ -411,12 +421,15 @@ function createQaChecklistForm() {
 
   // ---------- 응답 스프레드시트 연결 / Link a response spreadsheet ----------
   // 이걸 안 하면 응답이 폼 안에만 쌓이고 시트로는 안 나감.
-  var ss = SpreadsheetApp.create('원스토어 QA 체크리스트 — 응답 기록 / QA responses');
+  var ss = RESPONSE_SPREADSHEET_ID
+    ? SpreadsheetApp.openById(RESPONSE_SPREADSHEET_ID)
+    : SpreadsheetApp.create('원스토어 QA 체크리스트 — 응답 기록 / QA responses');
   form.setDestination(FormApp.DestinationType.SPREADSHEET, ss.getId());
 
   // setDestination 직후에는 응답 시트가 아직 안 잡힐 수 있어 다시 열어서 찾는다.
+  // 기존 시트에 붙인 경우 첫 번째 탭이 아니라 방금 생긴 응답 탭을 찾아야 한다.
   SpreadsheetApp.flush();
-  var sheet = SpreadsheetApp.openById(ss.getId()).getSheets()[0];
+  var sheet = findResponseSheet_(ss.getId(), form.getId());
 
   // 판정 열에만 색 규칙. 열 번호는 문항을 추가하며 자동으로 모아둔 verdictCols 사용
   // — 문항을 끼워넣어도 서식이 어긋나지 않는다.
@@ -445,5 +458,57 @@ function createQaChecklistForm() {
   Logger.log('응답용 링크 (제작자에게 배포, 로그인 불필요) / Share with developers: ' + form.getPublishedUrl());
   Logger.log('편집용 링크 (본인만) / Edit: ' + form.getEditUrl());
   Logger.log('응답 스프레드시트 / Responses: ' + ss.getUrl());
+  Logger.log('응답 탭 / Response tab: ' + (sheet ? sheet.getName() : '(못 찾음)'));
   Logger.log('판정 열 / verdict columns: ' + verdictCols.map(colLetter).join(', '));
+}
+
+/**
+ * 폼이 만든 응답 탭을 찾는다.
+ * 기존 스프레드시트에 붙이면 탭이 여러 개라 getSheets()[0]으로는 엉뚱한 걸 잡는다.
+ * getFormUrl()이 이 폼을 가리키는 탭만 진짜 응답 탭이다.
+ */
+function findResponseSheet_(spreadsheetId, formId) {
+  var sheets = SpreadsheetApp.openById(spreadsheetId).getSheets();
+  for (var i = 0; i < sheets.length; i++) {
+    var url = sheets[i].getFormUrl();
+    if (url && url.indexOf(formId) !== -1) return sheets[i];
+  }
+  return null;
+}
+
+/**
+ * 이미 배포해서 쓰고 있는 폼의 응답 대상만 옮긴다. (문항은 그대로)
+ *
+ * 쓰는 법: OLD_RESPONSE_SPREADSHEET_ID 에 지금 응답이 쌓이는 시트 ID를 넣고,
+ * 함수 목록에서 이 함수를 골라 실행.
+ *
+ * 주의
+ *  - 이전 응답은 따라오지 않는다. 옮긴 시점부터의 제출만 새 시트에 쌓인다.
+ *  - 폼의 응답 대상은 하나뿐이라, 옮기면 이전 시트로는 더 이상 안 들어온다.
+ *    (이전 시트에 쌓여 있던 기록 자체는 지워지지 않는다)
+ */
+function moveExistingFormDestination() {
+  var OLD_RESPONSE_SPREADSHEET_ID = '1f3xy_ykhb02aYRyQUI9VzTQwnP-XxcJM1_OOSy_pxe8';
+
+  if (!RESPONSE_SPREADSHEET_ID) {
+    throw new Error('RESPONSE_SPREADSHEET_ID가 비어 있다. 옮길 대상 시트 ID를 먼저 넣을 것.');
+  }
+
+  // 폼 ID를 몰라도 된다 — 지금 응답이 쌓이는 시트가 폼 주소를 들고 있다.
+  var oldSheets = SpreadsheetApp.openById(OLD_RESPONSE_SPREADSHEET_ID).getSheets();
+  var formUrl = null;
+  for (var i = 0; i < oldSheets.length; i++) {
+    formUrl = oldSheets[i].getFormUrl();
+    if (formUrl) break;
+  }
+  if (!formUrl) throw new Error('이 시트에 연결된 폼을 못 찾았다. ID를 확인할 것.');
+
+  var form = FormApp.openByUrl(formUrl);
+  form.setDestination(FormApp.DestinationType.SPREADSHEET, RESPONSE_SPREADSHEET_ID);
+  SpreadsheetApp.flush();
+
+  var moved = findResponseSheet_(RESPONSE_SPREADSHEET_ID, form.getId());
+  Logger.log('옮긴 폼 / Form: ' + form.getTitle());
+  Logger.log('새 응답 시트 / New destination: ' + SpreadsheetApp.openById(RESPONSE_SPREADSHEET_ID).getUrl());
+  Logger.log('새 응답 탭 / New tab: ' + (moved ? moved.getName() : '(다음 제출 때 생김)'));
 }
