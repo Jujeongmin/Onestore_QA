@@ -34,7 +34,7 @@
  *  2. 편집기 내용 전부 지우고 이 파일 전체를 붙여넣기
  *  2-1. 왼쪽 "파일 +" 로 스크립트 파일을 하나 더 만들고(이름 아무거나),
  *       원스토어_QA체크리스트_이미지데이터.gs 내용을 통째로 붙여넣기.
- *       비개발자용 설명 다이어그램 4장이 base64 PNG로 들어 있음 — 외부 호스팅 불필요.
+ *       설명 다이어그램과 실제 화면 예시가 base64로 들어 있음 — 외부 호스팅 불필요.
  *       이 파일을 안 넣어도 폼은 정상 생성되고 이미지만 빠진다(아래 addImage가 조용히 건너뜀).
  *  3. 상단 함수 목록에서 함수를 고르고 "실행"
  *       - 처음 만들 때        → createQaChecklistForm
@@ -164,33 +164,42 @@ function openManagedForm_() {
   var props = PropertiesService.getScriptProperties();
   var id = props.getProperty(FORM_ID_PROPERTY);
 
+  // 기록을 지우지 않는다. 권한 문제로 못 여는 것뿐인데 지워 버리면,
+  // 손으로 넣은 속성이 실패할 때마다 날아가 원인 찾기가 더 어려워진다.
   if (id) {
+    Logger.log('스크립트 속성 ' + FORM_ID_PROPERTY + ' = ' + id);
     try {
       return FormApp.openById(id);
     } catch (e) {
-      Logger.log('기록된 폼을 열 수 없어 기록을 비운다: ' + id);
-      props.deleteProperty(FORM_ID_PROPERTY);
+      Logger.log('기록된 폼을 열지 못했다 / could not open recorded form: ' + id +
+                 '\n  ' + e.message);
     }
+  } else {
+    Logger.log('스크립트 속성 ' + FORM_ID_PROPERTY + ' 이(가) 비어 있다 / property not set');
   }
 
-  // 기록이 없으면 응답 시트에 연결된 폼을 찾는다.
+  // 기록이 없거나 못 열면 응답 시트에 연결된 폼을 찾는다.
   var sheets = SpreadsheetApp.openById(RESPONSE_SPREADSHEET_ID).getSheets();
   for (var i = 0; i < sheets.length; i++) {
     var url = sheets[i].getFormUrl();
     if (!url) continue;
     try {
-      var found = FormApp.openByUrl(url);
+      var found = openFormLoosely_(url);
       props.setProperty(FORM_ID_PROPERTY, found.getId());
       Logger.log('응답 시트에서 폼을 찾아 기록했다 / found via response sheet: ' + found.getTitle());
       return found;
-    } catch (e) { /* 권한 없는 폼은 건너뛴다 */ }
+    } catch (e) {
+      // 못 여는 폼은 건너뛰되, 어느 폼이었는지는 남긴다 — 진짜 권한 문제일 때 단서가 된다.
+      Logger.log('폼을 열지 못해 건너뜀 / skipped: ' + url + '\n  ' + e.message);
+    }
   }
 
   throw new Error(
     '갱신할 폼을 찾지 못했다.\n' +
     '  · 아직 폼을 안 만들었으면 → createQaChecklistForm 실행\n' +
     '  · 폼은 있는데 못 찾으면   → listResponseTabs 로 어느 폼인지 확인 후,\n' +
-    '    스크립트 속성 ' + FORM_ID_PROPERTY + ' 에 폼 ID를 직접 넣을 것'
+    '    스크립트 속성 ' + FORM_ID_PROPERTY + ' 에 폼 ID를 직접 넣을 것\n' +
+    '  · 그래도 막히면 폼 소유자 계정으로 이 스크립트를 실행할 것'
   );
 }
 
@@ -239,7 +248,7 @@ function buildFormItems_(form) {
   /**
    * 확인할 것이 여럿인 항목. 체크한 것만 확인된 것으로 본다.
    * 전부 필수로 걸지 않는다 — 못 한 확인을 억지로 체크하게 만들면 폼의 의미가 없다.
-   * 대신 마무리의 '체크하지 못한 항목'에 적게 한다.
+   * 비워 둔 체크는 그대로 비운 채 제출된다.
    */
   var addChecks = function (title, help, options) {
     form.addCheckboxItem()
@@ -285,7 +294,14 @@ function buildFormItems_(form) {
       Logger.log('이미지 건너뜀 / image skipped: ' + name + ' (이미지데이터 파일 미포함)');
       return;
     }
-    var blob = Utilities.newBlob(Utilities.base64Decode(b64), 'image/png', name + '.png');
+    // base64 앞머리로 형식을 가린다. JPEG는 /9j/, PNG는 iVBOR 로 시작한다.
+    // 다이어그램은 PNG, 실제 화면 캡처는 JPEG(용량이 훨씬 작다)로 들어 있다.
+    var isJpeg = b64.indexOf('/9j/') === 0;
+    var blob = Utilities.newBlob(
+      Utilities.base64Decode(b64),
+      isJpeg ? 'image/jpeg' : 'image/png',
+      name + (isJpeg ? '.jpg' : '.png')
+    );
     form.addImageItem()
       .setImage(blob)
       .setTitle(altTitle)
@@ -299,9 +315,9 @@ function buildFormItems_(form) {
   addText('게임 이름  ·  Game title', '');
 
   addText(
-    '만든 분 / 팀  ·  Who made it',
-    '연락이 필요할 때 답해 주실 수 있는 분으로 적어 주세요.\n' +
-    'Someone we can contact if we need to follow up.'
+    '이메일  ·  Email',
+    '연락이 필요할 때 답을 받으실 수 있는 주소로 적어 주세요.\n' +
+    'An address where we can reach you if we need to follow up.'
   );
 
   addText(
@@ -312,13 +328,6 @@ function buildFormItems_(form) {
     'on your own computer cannot be checked.'
   );
 
-  addText(
-    '들어가는 데 필요한 게 있나요?  ·  Anything needed to get in',
-    '로그인이 필요하거나 특정 경로로 들어가야 하면 적어 주세요. 없으면 "없음".\n' +
-    '비밀번호는 여기 적지 마시고 따로 전달해 주세요.\n\n' +
-    'Note any sign-in or path needed. Write "none" if there is none. Do not put passwords here.'
-  );
-
   // ======================= 2. 화면 =======================
   addHeader('2. 화면 · Display', '휴대폰에서 제대로 보이는지 확인합니다 / How it looks on a phone');
 
@@ -326,8 +335,7 @@ function buildFormItems_(form) {
     '휴대폰에서 화면이 제대로 나오나요?  ·  Does it display correctly on a phone?',
     '확인한 것만 체크해 주세요. 실제 휴대폰으로 봐주세요 — 컴퓨터 창을 줄이는 것만으로는 ' +
     '안 잡히는 문제가 있습니다.\n' +
-    '자주 나오는 실수: 큰 폰에서만 확인하고 작은 폰을 안 봄.\n' +
-    '체크하지 못한 항목이 있으면 맨 아래 칸에 적어 주세요.\n\n' +
+    '자주 나오는 실수: 큰 폰에서만 확인하고 작은 폰을 안 봄.\n\n' +
     'Tick only what you checked. Use a real phone — shrinking a desktop window hides some problems.',
     [
       '버튼과 글자가 서로 겹치지 않음 / Nothing overlaps',
@@ -354,72 +362,91 @@ function buildFormItems_(form) {
   // ======================= 3. 광고 =======================
   addHeader('3. 광고 · Ads');
 
-  addImage(
-    typeof IMG_ENTRY_POINTS !== 'undefined' ? IMG_ENTRY_POINTS : null,
-    'entry_points',
-    '참고 그림 — 광고 버튼과 결제 버튼이란? / Reference — what counts as an ad or purchase button'
-  );
-
   addChecks(
-    '게임에 광고와 결제가 둘 다 들어가 있나요?  ·  Are both ads and purchases in the game?',
-    '코드에만 있고 화면에 안 보이면 없는 것과 같습니다. 실제로 눌러보고 체크해 주세요.\n' +
-    '자주 나오는 실수: "나중에 붙이기로" 한 쪽을 잊고 제출.\n\n' +
-    'If it exists in code but not on screen, it does not count. Press both in the real build.',
+    '게임에 광고와 결제가 들어가 있나요?  ·  Are ads or purchases in the game?',
+    '있는 것만 체크해 주세요. 둘 다 있어야 하는 것은 아닙니다.\n' +
+    '코드에만 있고 화면에 안 보이면 없는 것과 같습니다. 실제로 눌러보고 체크해 주세요.\n\n' +
+    'Tick whichever the game has — it does not need both. If it exists in code but not on ' +
+    'screen, it does not count. Press it in the real build.',
     [
       '광고를 보는 버튼이 있음 (예: "광고 보고 이어하기") / There is an ad button',
       '결제하는 곳이 있음 (예: 상점, 구매 버튼) / There is a place to buy'
     ]
   );
 
+  addImage(
+    typeof IMG_AD_EXAMPLE !== 'undefined' ? IMG_AD_EXAMPLE : null,
+    'ad_example',
+    '실제 예시 — 상점 안의 광고 보상 버튼(빨간 동그라미) / Example — a rewarded-ad button inside a shop'
+  );
+
   addText(
     '광고 버튼과 결제 버튼은 어디에 있나요?  ·  Where are they?',
-    '검토팀이 찾아 들어갈 수 있게 위치를 적어 주세요.\n' +
-    '예: "게임오버 창의 \'시간 늘리기\' 버튼 = 광고 / 오른쪽 위 상점 아이콘 = 결제"\n\n' +
-    'Tell us exactly what to click to reach each one.'
+    '검토팀이 찾아 들어갈 수 있게 위치를 적어 주세요. 있는 것만 적으시면 됩니다.\n' +
+    '예)\n' +
+    '· 광고 — 게임 오버 화면의 "부활하기" 버튼\n' +
+    '· 광고 — 게임 오버 화면의 "시간 늘리기" 버튼\n' +
+    '· 광고 — 상점이나 메인 화면의 "골드 더 받기" 버튼\n' +
+    '· 결제 — 상점 안의 유료 상품\n\n' +
+    'List only what the game actually has. e.g.\n' +
+    '· Ad — "Revive" button on the game-over screen\n' +
+    '· Ad — "Add time" button on the game-over screen\n' +
+    '· Ad — "Get extra gold" button in the shop or on the main screen\n' +
+    '· Purchase — paid items in the shop'
   );
 
   addVerdict(
-    '광고가 안 뜰 때 게임이 멈추지 않나요?  ·  If an ad never loads, does the game recover?',
-    '광고가 응답하지 않아도 2분(120초) 뒤에는 원래 화면으로 돌아와야 합니다. ' +
-    '그 사이 유저가 손해 보는 것도 없어야 합니다.\n' +
-    '자주 나오는 실수: 대기 시간을 늘려도, 광고 창이 자체 타이머로 먼저 닫혀서 소용없는 경우.\n\n' +
-    'An unresponsive ad must return to the previous screen after 120s, with no penalty to the player.'
-  );
-
-  addText(
-    '대기 시간을 직접 설정하셨다면 어디에 있는지 알려주세요  ·  Where is the timeout set?',
-    '직접 코드를 만지지 않으셨다면 비워두셔도 됩니다.\n' +
-    'Optional — leave blank if you did not set this yourself.',
-    false
-  );
-
-  addChecks(
     '광고를 끝까지 보면 보상이 제대로 들어오나요?  ·  Does watching an ad give the reward?',
+    '아래 셋을 모두 만족해야 통과입니다.\n' +
+    '· 끝까지 보면 보상이 들어옴\n' +
+    '· 중간에 닫으면 보상이 안 들어옴\n' +
+    '· 중간에 닫아도 불이익은 없음 (다시 도전 가능)\n' +
     '실제 배포된 주소에서 확인해 주세요. 만드는 중인 화면에서는 광고가 아예 안 나옵니다.\n\n' +
-    'Check on the deployed link. Ads do not run in a local or development environment.',
-    [
-      '끝까지 보면 보상이 들어옴 / Full watch gives the reward',
-      '중간에 닫으면 보상이 안 들어옴 / Closing early gives nothing',
-      '중간에 닫아도 불이익은 없음 (다시 도전 가능) / Closing early costs nothing either'
-    ]
+    'Pass only if all three hold: a full watch gives the reward, closing early gives nothing, ' +
+    'and closing early costs nothing either. Check on the deployed link — ads do not run in a ' +
+    'local or development environment.'
   );
 
-  addText(
-    '보상을 어떻게 확인하셨나요?  ·  How did you check the reward?',
-    '검토팀이 광고를 끝까지 보고 확인하기 어려워서 여쭙습니다.\n' +
-    '예: "광고 다 보니 시간이 15초 늘어남 / 중간에 닫으니 안 늘어남"\n' +
-    '스크린샷이나 영상 링크가 있으면 함께 주세요.\n\n' +
-    'We cannot easily reproduce a full ad watch, so please describe what you saw.'
+  // 타임아웃 문항. 개발을 모르는 제작자가 대부분이므로 "타임아웃"이 무슨 말인지부터
+  // 풀어 쓰고, 고치는 방법(AI에게 그대로 붙여넣을 문장)까지 한 문항 안에 담는다.
+  // 여기서 설명을 아끼면 뜻을 모른 채 통과로 찍고 넘어간다.
+  addVerdict(
+    '광고 타임아웃을 120초로 설정하셨나요?  ·  Is the ad timeout set to 120 seconds?',
+    '[이게 무슨 말인가요]\n' +
+    '유저가 광고를 보기 시작하면 그 순간부터 시간이 흐릅니다. 정해진 시간 안에 광고를 ' +
+    '다 보고 닫기 버튼까지 누르지 못하면, 그 광고는 "안 본 것"으로 처리되어 보상이 ' +
+    '들어가지 않습니다. 이 제한 시간을 타임아웃이라 부르고, 120초로 잡아야 합니다.\n\n' +
+    '[왜 120초인가요]\n' +
+    '이 값이 짧으면 광고를 끝까지 성실히 본 유저도 시간이 모자라 보상을 못 받습니다. ' +
+    '광고 길이는 저마다 다르고, 닫기 버튼을 누르기까지 몇 초가 더 걸리기도 합니다. ' +
+    '120초는 그 여유까지 감안한 기준값입니다.\n\n' +
+    '[안 돼 있으면 — 고치는 법]\n' +
+    'Verse8 SDK를 쓰신다면 광고를 띄우는 부분에 timeoutMs 값을 넣으면 됩니다.\n' +
+    '    Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 })\n' +
+    '단위는 밀리초라서 120_000 이 120초입니다.\n\n' +
+    '코드를 직접 만지지 않으셨다면, 게임을 만들 때 쓰신 AI에게 아래 문장을 그대로 ' +
+    '붙여넣으세요.\n' +
+    '"Verse8 SDK에서 광고 timeout 설정값을 ' +
+    'Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 }) 으로 변경해줘"\n\n' +
+    '[What this means]\n' +
+    'The clock starts the moment a player begins watching an ad. If they do not finish the ad ' +
+    'and press the close button within the allotted time, the ad counts as unwatched and no ' +
+    'reward is granted. That limit is the timeout, and it must be set to 120 seconds.\n\n' +
+    '[Why 120 seconds]\n' +
+    'Set it too low and players who genuinely watched the whole ad still lose the reward. ' +
+    'Ad lengths vary, and pressing the close button takes a few seconds more. 120 seconds ' +
+    'is the figure that leaves room for both.\n\n' +
+    '[How to fix]\n' +
+    'On the Verse8 SDK, pass timeoutMs where you show the ad:\n' +
+    '    Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 })\n' +
+    'The unit is milliseconds, so 120_000 is 120 seconds.\n\n' +
+    'If you did not write the code yourself, paste this to the AI you built the game with:\n' +
+    '"Change the Verse8 SDK ad timeout to ' +
+    'Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 })"'
   );
 
   // ======================= 4. 저장과 결제 =======================
   addHeader('4. 저장과 결제 · Saving and payments');
-
-  addImage(
-    typeof IMG_ACCOUNT_SAVE !== 'undefined' ? IMG_ACCOUNT_SAVE : null,
-    'account_save',
-    '참고 그림 — 계정에 저장 vs 이 기기에만 저장 / Reference — account-bound vs device-only saves'
-  );
 
   addChecks(
     '게임 기록이 계정에 저장되나요?  ·  Is progress saved to the account?',
@@ -438,29 +465,28 @@ function buildFormItems_(form) {
 
   addText(
     '기기 두 개로 어떻게 확인하셨나요?  ·  How did you check across two devices?',
-    '검토팀은 만드신 분의 계정으로 로그인할 수 없어 재현이 안 됩니다.\n' +
     '예: "컴퓨터에서 레벨 5까지 올린 뒤 휴대폰으로 접속하니 레벨 5로 나옴"\n\n' +
-    'We cannot sign in as you, so please describe what you did.'
+    'e.g. "Reached level 5 on a PC, then opened it on a phone and it was still level 5."'
   );
 
-  addChecks(
+  addImage(
+    typeof IMG_PURCHASE_EXAMPLE !== 'undefined' ? IMG_PURCHASE_EXAMPLE : null,
+    'purchase_example',
+    '실제 예시 — 구매 버튼을 눌렀을 때 떠야 하는 결제창 / Example — the checkout that must open on buy'
+  );
+
+  addVerdict(
     '결제 버튼을 누르면 결제창이 뜨나요?  ·  Does the checkout open when you press buy?',
-    '상품이 여러 개면 전부 눌러봐 주세요.\n' +
-    '자주 나오는 실수: 테스트할 때와 실제 등록한 상품 번호가 달라서, 심사용 빌드에서만 ' +
-    '결제창이 안 뜨는 경우.\n\n' +
-    'Press buy on every product. Mismatched test and production product IDs are the usual cause ' +
-    'of a checkout that never opens.',
-    [
-      '상품을 전부 눌러봤고 모두 결제창이 떴음 / Checkout opened for every product',
-      '결제한 재화가 계정에 남아 기기를 바꿔도 유지됨 / Purchased currency survives a device change'
-    ]
+    '아래 둘을 모두 만족해야 통과입니다.\n' +
+    '· 상품이 여러 개면 전부 눌러봤고, 모두 결제창이 떴음\n' +
+    '· 결제한 재화가 계정에 남아 기기를 바꿔도 유지됨\n\n' +
+    'Pass only if both hold: checkout opened for every product you pressed, and purchased ' +
+    'currency stays on the account across a device change.'
   );
 
   addText(
     '결제 상품이 몇 개인가요?  ·  How many purchase items are there?',
-    '실제로 결제까지 해보셨다면 재화가 잘 들어왔는지도 적어 주세요. ' +
-    '검토팀은 결제창이 뜨는 것까지만 확인하고 실제 결제는 하지 않습니다.\n\n' +
-    'We only check that checkout opens — we do not complete a purchase.'
+    ''
   );
 
   // ======================= 5. 스토어 등록 정보 =======================
@@ -468,9 +494,7 @@ function buildFormItems_(form) {
 
   addChecks(
     '게임 설명을 한국어와 영어 둘 다 넣으셨나요?  ·  Is the description filled in both languages?',
-    '등록 화면에서 언어 탭을 하나씩 눌러 확인해 주세요.\n' +
-    '자주 나오는 실수: 미리보기에는 기본 언어만 보여서, 영어 탭이 비어 있는 걸 모르고 제출.\n\n' +
-    'Click through each language tab. The preview only shows the default language.',
+    '',
     [
       '한국어 설명을 넣었음 / Korean description filled',
       '영어 설명을 넣었음 / English description filled'
@@ -479,12 +503,6 @@ function buildFormItems_(form) {
 
   // ======================= 6. 화면 방향과 언어 =======================
   addHeader('6. 화면 방향과 언어 · Orientation and language');
-
-  addImage(
-    typeof IMG_ORIENTATION !== 'undefined' ? IMG_ORIENTATION : null,
-    'orientation',
-    '참고 그림 — 세로 전용 / 가로 전용 / 둘 다 / Reference — the three orientation modes'
-  );
 
   addChoice(
     '이 게임은 어느 방향으로 하는 게임인가요?  ·  Which orientation is this game for?',
@@ -497,9 +515,7 @@ function buildFormItems_(form) {
   addVerdict(
     '실제로도 그렇게 동작하나요?  ·  Does the build actually behave that way?',
     '세로 전용이라고 하셨으면 — 폰을 가로로 돌려도 화면이 세로로 고정돼야 합니다.\n' +
-    '둘 다 가능이라고 하셨으면 — 돌렸을 때 버튼과 글자가 각 방향에 맞게 다시 배치돼야 합니다.\n' +
-    '자주 나오는 실수: 고정을 안 해놔서 "일단 둘 다 되긴 하는" 상태 — 실제로는 한쪽만 ' +
-    '테스트된 경우가 많습니다.\n\n' +
+    '둘 다 가능이라고 하셨으면 — 돌렸을 때 버튼과 글자가 각 방향에 맞게 다시 배치돼야 합니다.\n\n' +
     'Rotate the device and confirm it matches what you declared above.'
   );
 
@@ -525,22 +541,14 @@ function buildFormItems_(form) {
 
   addText(
     '언어는 어디서 바꾸나요?  ·  Where is the language switch?',
-    '예: "메인 화면 오른쪽 위 KR/EN 버튼"\n' +
+    '예: "메인 화면 오른쪽 위 KR/EN 버튼", "설정 메뉴 안의 언어 설정"\n' +
     '자동으로 휴대폰 언어를 따라간다면 그렇게 적어 주세요.\n\n' +
-    'e.g. "KR/EN toggle, top-right of the main screen". If it follows the device language, say so.'
+    'e.g. "KR/EN toggle, top-right of the main screen" or "Language option inside Settings". ' +
+    'If it follows the device language, say so.'
   );
 
   // ======================= 7. 마무리 =======================
   addHeader('7. 마무리 · Wrap-up');
-
-  addParagraph(
-    '체크하지 못한 항목이 있나요?  ·  Anything you could not tick?',
-    '어느 항목이고 무엇이 문제였는지 적어 주세요. 전부 체크하셨으면 "없음".\n' +
-    '이 게임에 광고나 결제가 애초에 없어서 체크할 수 없었던 경우에도 여기에 적어 주세요.\n\n' +
-    'Say which item and what you saw. Write "none" if everything was ticked. Also use this if ' +
-    'the game genuinely ships without ads or purchases.',
-    true
-  );
 
   addParagraph(
     '그 밖에 알려주실 것  ·  Anything else we should know',
@@ -558,14 +566,13 @@ function buildFormItems_(form) {
     '확인하지 않은 항목을 체크하셨거나 내용이 실제와 다르면 이 단계에서 드러납니다.\n\n' +
     '· 재검수 대상이 되어 출시 일정이 밀립니다\n' +
     '· 같은 일이 반복되면 스토어 노출 순위에서 후순위로 밀릴 수 있습니다\n\n' +
-    '확인하지 못한 항목이 있어도 괜찮습니다. 체크를 비워 두고 위 \'체크하지 못한 항목\'에 ' +
-    '그대로 적어 주세요. 솔직하게 적힌 쪽이 훨씬 빠르게 처리됩니다 — 불이익은 확인을 안 한 것이 ' +
-    '아니라, 확인한 것처럼 적은 것에 붙습니다.\n\n' +
+    '확인하지 못한 항목이 있어도 괜찮습니다. 체크를 비워 두고 제출하셔도 됩니다 — ' +
+    '불이익은 확인을 안 한 것이 아니라, 확인한 것처럼 적은 것에 붙습니다.\n\n' +
     'Our reviewers open your game and check these answers one by one. Ticking something you did ' +
     'not actually verify will surface here — it sends the build back for re-review and delays your ' +
     'release, and repeated cases can push your game down in store placement. It is fine to leave a ' +
-    'box unticked: say so in "Anything you could not tick" above. Being upfront is handled faster. ' +
-    'The penalty is for claiming a check you did not do, not for the missing check itself.'
+    'box unticked and submit as is. The penalty is for claiming a check you did not do, not for ' +
+    'the missing check itself.'
   );
 
   return verdictCols;
@@ -646,7 +653,7 @@ function assertNoExistingForm_() {
     '\n' +
     '  · 문항을 이 파일 내용으로 갈아끼울 것이면 → rebuildExistingForm 실행\n' +
     '  · 일부만 손볼 것이면        → 위 편집 링크로 직접 수정\n' +
-    '  · 응답 시트를 옮길 것이면    → moveExistingFormDestination 실행\n' +
+    '  · 응답 시트를 옮길 것이면    → 폼 편집화면 → 응답 → ⋮ → "응답 대상 선택"\n' +
     '  · 탭이 어느 폼 것인지 볼 것이면 → listResponseTabs 실행\n' +
     '  · 정말 별개의 폼이 필요하면   → ALLOW_NEW_FORM 을 true 로'
   );
@@ -676,18 +683,106 @@ function listResponseTabs() {
 
     // 1행은 머리글이므로 응답 건수에서 뺀다. 빈 탭이면 getLastRow()가 0이다.
     var rows = Math.max(0, s.getLastRow() - 1);
-    var title = '(폼을 열 수 없음 — 권한 확인 필요)';
+    var formId = formIdFromUrl_(formUrl);
+    var title = '(열지 못함 — 아래 원인 참고)';
     try {
-      title = FormApp.openByUrl(formUrl).getTitle();
+      title = openFormLoosely_(formUrl).getTitle();
     } catch (e) {}
 
     Logger.log(head + ' — 응답 ' + rows + '건 / ' + rows + ' responses' +
                '\n      폼 / form: ' + title +
+               '\n      폼 ID / form id: ' + (formId || '(주소에서 못 뽑음)') +
                '\n      ' + formUrl);
   }
 
   Logger.log('응답이 쌓이고 있는 탭이 실제로 배포된 폼의 것이다. ' +
              '0건인 탭은 재실행으로 생긴 빈 껍데기일 가능성이 높다.');
+  Logger.log('폼 제목이 "열지 못함"으로 나와도 폼 ID는 그대로 쓸 수 있다. ' +
+             '스크립트 속성 ' + FORM_ID_PROPERTY + ' 에 넣고 rebuildExistingForm 을 돌려 볼 것 — ' +
+             '거기서도 막히면 그때가 진짜 권한 문제다.');
+}
+
+/**
+ * 폼을 왜 못 여는지 하나씩 찍는다. 아무것도 바꾸지 않는다.
+ *
+ * rebuildExistingForm 이 '갱신할 폼을 찾지 못했다'로 죽을 때 원인을 가리는 용도.
+ * 원인은 보통 둘 중 하나다 — 스크립트 속성이 안 들어갔거나, 실행 계정에 폼
+ * 편집 권한이 없거나. 이 함수는 그 둘을 갈라 준다.
+ */
+function diagnoseFormAccess() {
+  Logger.log('=== 1. 실행 계정 / who is running ===');
+  Logger.log('활성 사용자 / active user: ' + (Session.getActiveUser().getEmail() || '(못 읽음)'));
+  Logger.log('실행 사용자 / effective user: ' + (Session.getEffectiveUser().getEmail() || '(못 읽음)'));
+
+  Logger.log('=== 2. 스크립트 속성 / script property ===');
+  var props = PropertiesService.getScriptProperties();
+  var all = props.getProperties();
+  var names = Object.keys(all);
+  Logger.log('등록된 속성 이름 / keys: ' + (names.length ? names.join(', ') : '(하나도 없음)'));
+  var id = props.getProperty(FORM_ID_PROPERTY);
+  Logger.log(FORM_ID_PROPERTY + ' = ' + (id ? ('"' + id + '"  (길이 ' + id.length + ')') : '(비어 있음)'));
+
+  Logger.log('=== 3. 응답 시트에 연결된 폼 / forms linked to the sheet ===');
+  var sheets = SpreadsheetApp.openById(RESPONSE_SPREADSHEET_ID).getSheets();
+  var candidates = [];
+  for (var i = 0; i < sheets.length; i++) {
+    var url = sheets[i].getFormUrl();
+    if (!url) continue;
+    var fid = formIdFromUrl_(url);
+    Logger.log('탭 "' + sheets[i].getName() + '" → 폼 ID ' + fid);
+    if (fid) candidates.push(fid);
+  }
+  if (id && candidates.indexOf(id) === -1) {
+    Logger.log('⚠️ 속성에 넣은 ID가 이 시트에 연결된 폼 목록에 없다. 오타이거나 다른 폼이다.');
+  }
+
+  Logger.log('=== 4. 열어 보기 / try opening ===');
+  var targets = id ? [id].concat(candidates) : candidates;
+  for (var j = 0; j < targets.length; j++) {
+    var t = targets[j];
+    try {
+      Logger.log('✅ ' + t + ' → 열림: "' + FormApp.openById(t).getTitle() + '"');
+    } catch (e) {
+      Logger.log('❌ ' + t + ' → 실패: ' + e.message);
+      try {
+        var owner = DriveApp.getFileById(t).getOwner();
+        Logger.log('    이 폼의 소유자 / owner: ' + (owner ? owner.getEmail() : '(못 읽음)'));
+      } catch (e2) {
+        Logger.log('    소유자도 못 읽음 — 이 계정에 파일 접근 권한 자체가 없다: ' + e2.message);
+      }
+    }
+  }
+
+  Logger.log('=== 읽는 법 ===');
+  Logger.log('· 4번에 ✅ 가 하나라도 있으면 → 그 ID를 ' + FORM_ID_PROPERTY + ' 에 넣고 rebuildExistingForm');
+  Logger.log('· 전부 ❌ 이고 소유자가 1번의 실행 계정과 다르면 → 소유자 계정으로 이 스크립트를 실행할 것');
+  Logger.log('· 2번에서 속성이 (비어 있음) 이면 → 프로젝트 설정에서 저장이 안 된 것');
+}
+
+/**
+ * 폼 주소에서 ID만 뽑는다. .../forms/d/{id}/viewform 또는 .../edit 둘 다 받는다.
+ * 못 뽑으면 null.
+ */
+function formIdFromUrl_(url) {
+  var m = /\/forms\/d\/(?:e\/)?([a-zA-Z0-9_-]+)/.exec(url || '');
+  return m ? m[1] : null;
+}
+
+/**
+ * 폼을 최대한 열어 본다.
+ *
+ * getFormUrl() 은 /viewform 주소를 준다. FormApp.openByUrl 은 이 형태에서
+ * 실패하는 경우가 있어서, 주소에서 ID를 뽑아 openById 를 먼저 시도한다.
+ * 둘 다 실패하면 마지막 오류를 그대로 올린다 — 그때는 대개 진짜 권한 문제다.
+ */
+function openFormLoosely_(url) {
+  var id = formIdFromUrl_(url);
+  if (id) {
+    try {
+      return FormApp.openById(id);
+    } catch (e) { /* openByUrl 로 한 번 더 */ }
+  }
+  return FormApp.openByUrl(url);
 }
 
 /**
@@ -704,53 +799,3 @@ function findResponseSheet_(spreadsheetId, formId) {
   return null;
 }
 
-/**
- * 이미 배포해서 쓰고 있는 폼의 응답 대상만 옮긴다. (문항은 그대로)
- *
- * 쓰는 법: OLD_RESPONSE_SPREADSHEET_ID 에 지금 응답이 쌓이는 시트 ID를 넣고,
- * 함수 목록에서 이 함수를 골라 실행.
- *
- * 주의
- *  - 이전 응답은 따라오지 않는다. 옮긴 시점부터의 제출만 새 시트에 쌓인다.
- *  - 폼의 응답 대상은 하나뿐이라, 옮기면 이전 시트로는 더 이상 안 들어온다.
- *    (이전 시트에 쌓여 있던 기록 자체는 지워지지 않는다)
- */
-function moveExistingFormDestination() {
-  var OLD_RESPONSE_SPREADSHEET_ID = '1f3xy_ykhb02aYRyQUI9VzTQwnP-XxcJM1_OOSy_pxe8';
-
-  if (!RESPONSE_SPREADSHEET_ID) {
-    throw new Error('RESPONSE_SPREADSHEET_ID가 비어 있다. 옮길 대상 시트 ID를 먼저 넣을 것.');
-  }
-
-  // 폼 ID를 몰라도 된다 — 지금 응답이 쌓이는 시트가 폼 주소를 들고 있다.
-  var oldSheets = SpreadsheetApp.openById(OLD_RESPONSE_SPREADSHEET_ID).getSheets();
-  var formUrl = null;
-  for (var i = 0; i < oldSheets.length; i++) {
-    formUrl = oldSheets[i].getFormUrl();
-    if (formUrl) break;
-  }
-  if (!formUrl) throw new Error('이 시트에 연결된 폼을 못 찾았다. ID를 확인할 것.');
-
-  // 폼을 못 열면 권한 문제다. 어느 폼인지 먼저 찍어두면 소유자 확인이 쉽다.
-  Logger.log('연결된 폼 주소 / Linked form: ' + formUrl);
-
-  var form;
-  try {
-    form = FormApp.openByUrl(formUrl);
-  } catch (e) {
-    throw new Error(
-      '폼을 열 수 없다 — 지금 로그인한 계정에 이 폼의 편집 권한이 없다.\n' +
-      '폼 주소: ' + formUrl + '\n' +
-      '해결: 폼 소유자 계정으로 이 스크립트를 실행하거나, 폼 소유자가 이 계정을 편집자로 추가할 것.\n' +
-      '(스크립트 없이 폼 편집화면 → 응답 → ⋮ → "응답 대상 선택"으로도 같은 작업이 가능하다)\n' +
-      '원본 오류: ' + e.message
-    );
-  }
-  form.setDestination(FormApp.DestinationType.SPREADSHEET, RESPONSE_SPREADSHEET_ID);
-  SpreadsheetApp.flush();
-
-  var moved = findResponseSheet_(RESPONSE_SPREADSHEET_ID, form.getId());
-  Logger.log('옮긴 폼 / Form: ' + form.getTitle());
-  Logger.log('새 응답 시트 / New destination: ' + SpreadsheetApp.openById(RESPONSE_SPREADSHEET_ID).getUrl());
-  Logger.log('새 응답 탭 / New tab: ' + (moved ? moved.getName() : '(다음 제출 때 생김)'));
-}
