@@ -32,6 +32,8 @@
  *       - 응답 스프레드시트: 제출 기록이 한 줄씩 쌓이는 시트
  *
  * 다시 실행하면 새 폼 + 새 시트가 또 생김. 기존 것을 수정하려면 편집 링크로 직접.
+ * 두 번째 실행부터는 가드가 막는다(아래 ALLOW_NEW_FORM 참고).
+ * 응답 탭이 여러 개로 늘어나 어느 게 진짜인지 헷갈리면 listResponseTabs 실행.
  * 모든 문항은 한국어 + 영어 병기. 해외 제작자도 그대로 쓸 수 있음.
  *
  * 판정은 통과 / 실패 두 가지뿐. "해당없음"은 두지 않는다 — 확인 안 한 항목을
@@ -49,7 +51,24 @@
  */
 var RESPONSE_SPREADSHEET_ID = '1djUhtImOZdvaZb1tvGJHheoZ2L3s4LHCnCWhz0gLRmo';
 
+/**
+ * 재실행 가드.
+ *
+ * createQaChecklistForm 은 실행할 때마다 폼을 통째로 새로 만든다. 이미 배포한
+ * 폼이 있는 상태에서 또 실행하면 새 폼이 생기고, 그 새 폼이 응답 스프레드시트에
+ * 탭을 하나 더 만든다. 배포해 둔 링크는 여전히 예전 폼이라 응답은 예전 탭에
+ * 쌓이고, 새로 생긴 탭은 계속 비어 있다 — 응답 시트가 "자꾸 바뀌는" 것처럼 보이는
+ * 원인이 이것이다.
+ *
+ * 그래서 만든 폼 ID를 스크립트 속성에 적어두고 두 번째 실행부터는 멈춘다.
+ * 정말 별개의 폼이 필요할 때만 true 로 바꿀 것.
+ */
+var ALLOW_NEW_FORM = false;
+var FORM_ID_PROPERTY = 'QA_FORM_ID';
+
 function createQaChecklistForm() {
+  assertNoExistingForm_();
+
   var form = FormApp.create('Verse8 · 원스토어 출시 전 QA 체크리스트 / Pre-release QA Checklist');
 
   form.setDescription(
@@ -455,11 +474,86 @@ function createQaChecklistForm() {
     Logger.log('색 규칙 적용 실패(폼/응답은 정상) / colour rules failed, form still fine: ' + e);
   }
 
+  // 만든 폼을 기억해 둔다. 다음 실행 때 assertNoExistingForm_ 이 이걸 보고 막는다.
+  PropertiesService.getScriptProperties().setProperty(FORM_ID_PROPERTY, form.getId());
+
   Logger.log('응답용 링크 (제작자에게 배포, 로그인 불필요) / Share with developers: ' + form.getPublishedUrl());
   Logger.log('편집용 링크 (본인만) / Edit: ' + form.getEditUrl());
   Logger.log('응답 스프레드시트 / Responses: ' + ss.getUrl());
   Logger.log('응답 탭 / Response tab: ' + (sheet ? sheet.getName() : '(못 찾음)'));
   Logger.log('판정 열 / verdict columns: ' + verdictCols.map(colLetter).join(', '));
+}
+
+/**
+ * 이미 만든 폼이 있으면 멈춘다. 없으면 조용히 통과.
+ *
+ * 기록해 둔 폼이 지워졌거나 열 권한이 없으면 기록을 지우고 통과시킨다 —
+ * 죽은 ID 하나 때문에 영영 못 만들게 되는 상황을 피한다.
+ */
+function assertNoExistingForm_() {
+  if (ALLOW_NEW_FORM) return;
+
+  var props = PropertiesService.getScriptProperties();
+  var existingId = props.getProperty(FORM_ID_PROPERTY);
+  if (!existingId) return;
+
+  var existing;
+  try {
+    existing = FormApp.openById(existingId);
+  } catch (e) {
+    Logger.log('기록된 폼을 열 수 없어 기록을 비운다(삭제됐거나 권한 없음): ' + existingId);
+    props.deleteProperty(FORM_ID_PROPERTY);
+    return;
+  }
+
+  throw new Error(
+    '이미 만든 폼이 있다. 새로 만들면 응답 탭이 하나 더 생기고 응답이 흩어진다.\n' +
+    '기존 폼 편집: ' + existing.getEditUrl() + '\n' +
+    '기존 폼 배포: ' + existing.getPublishedUrl() + '\n' +
+    '\n' +
+    '  · 문항만 고칠 것이면  → 위 편집 링크로 직접 수정\n' +
+    '  · 응답 시트를 옮길 것이면 → moveExistingFormDestination 실행\n' +
+    '  · 탭이 어느 폼 것인지 볼 것이면 → listResponseTabs 실행\n' +
+    '  · 정말 별개의 폼이 필요하면 → ALLOW_NEW_FORM 을 true 로'
+  );
+}
+
+/**
+ * 응답 스프레드시트의 탭을 전부 훑어서 어느 폼과 연결됐는지, 응답이 몇 건인지 찍는다.
+ *
+ * 폼을 여러 번 만들어 탭이 늘어났을 때 어느 탭이 실제로 배포된 폼의 것인지
+ * 가려내는 용도. 읽기만 하며 아무것도 바꾸지 않는다.
+ */
+function listResponseTabs() {
+  var ss = SpreadsheetApp.openById(RESPONSE_SPREADSHEET_ID);
+  var sheets = ss.getSheets();
+  Logger.log('시트 / Spreadsheet: ' + ss.getUrl());
+  Logger.log('탭 ' + sheets.length + '개 / ' + sheets.length + ' tabs');
+
+  for (var i = 0; i < sheets.length; i++) {
+    var s = sheets[i];
+    var head = '[' + (i + 1) + '] ' + s.getName() + '  (gid ' + s.getSheetId() + ')';
+    var formUrl = s.getFormUrl();
+
+    if (!formUrl) {
+      Logger.log(head + ' — 폼 연결 없음 / not a form response tab');
+      continue;
+    }
+
+    // 1행은 머리글이므로 응답 건수에서 뺀다. 빈 탭이면 getLastRow()가 0이다.
+    var rows = Math.max(0, s.getLastRow() - 1);
+    var title = '(폼을 열 수 없음 — 권한 확인 필요)';
+    try {
+      title = FormApp.openByUrl(formUrl).getTitle();
+    } catch (e) {}
+
+    Logger.log(head + ' — 응답 ' + rows + '건 / ' + rows + ' responses' +
+               '\n      폼 / form: ' + title +
+               '\n      ' + formUrl);
+  }
+
+  Logger.log('응답이 쌓이고 있는 탭이 실제로 배포된 폼의 것이다. ' +
+             '0건인 탭은 재실행으로 생긴 빈 껍데기일 가능성이 높다.');
 }
 
 /**
