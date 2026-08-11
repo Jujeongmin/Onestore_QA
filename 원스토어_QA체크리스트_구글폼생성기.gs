@@ -36,14 +36,31 @@
  *       원스토어_QA체크리스트_이미지데이터.gs 내용을 통째로 붙여넣기.
  *       설명 다이어그램과 실제 화면 예시가 base64로 들어 있음 — 외부 호스팅 불필요.
  *       이 파일을 안 넣어도 폼은 정상 생성되고 이미지만 빠진다(아래 addImage가 조용히 건너뜀).
- *  3. 상단 함수 목록에서 함수를 고르고 "실행"
- *       - 처음 만들 때        → createQaChecklistForm
- *       - 이미 배포한 폼 갱신  → rebuildExistingForm   ← 문항을 고쳤을 때 이것
+ *  3. 상단 함수 목록에서 rebuildExistingForm 을 고르고 "실행"
+ *       아래 FORM_ID 에 지정된 폼의 문항만 갈아끼운다. 몇 번을 실행하든
+ *       편집 링크 · 배포 링크 · 응답 탭이 그대로라서 링크를 다시 뿌릴 필요가 없다.
+ *       (createQaChecklistForm 은 폼을 통째로 새로 만드는 함수라 FORM_ID 가
+ *        박혀 있는 동안에는 실행되지 않고 막힌다)
  *  4. 최초 1회 권한 승인 (Google 폼 + 스프레드시트 생성 권한)
  *  5. 실행 로그에 나오는 링크 확인
  *
  * createQaChecklistForm 은 두 번째 실행부터 가드가 막는다(아래 ALLOW_NEW_FORM 참고).
  * 응답 탭이 여러 개로 늘어나 어느 게 진짜인지 헷갈리면 listResponseTabs 실행.
+ *
+ * ---------------------------------------------------------------------------
+ * 응답 탭이 자꾸 새로 생긴다면 / If a new response tab keeps appearing
+ *
+ * 응답 탭을 만드는 것은 form.setDestination() 하나뿐이고, 그것을 부르는 함수는
+ * createQaChecklistForm 하나뿐이다. rebuildExistingForm 은 문항만 갈아끼우므로
+ * 몇 번을 돌려도 탭이 늘지 않는다.
+ *
+ * 즉 "탭이 새로 생겼다"는 것은 "폼이 새로 만들어졌다"는 뜻이다. 문항을 고쳤을 때는
+ * 반드시 rebuildExistingForm 을 쓸 것. 그러면 응답 탭 하나가 계속 유지된다.
+ *
+ * 참고로 구글에는 폼을 "기존 탭"에 연결하는 방법이 없다. setDestination 은 언제나
+ * 새 탭을 만든다. 그러니 탭을 고정하는 방법은 폼을 새로 만들지 않는 것뿐이다.
+ * FORM_ID 를 박아 두고 rebuildExistingForm 만 쓰는 지금 구조가 그것이다.
+ * ---------------------------------------------------------------------------
  * 모든 문항은 한국어 + 영어 병기. 해외 제작자도 그대로 쓸 수 있음.
  *
  * "해당없음" 선택지는 두지 않는다 — 확인 안 한 항목을 조용히 넘기는 통로가 되기
@@ -59,6 +76,26 @@
  * ID는 URL의 /d/ 와 /edit 사이 문자열이다.
  */
 var RESPONSE_SPREADSHEET_ID = '1djUhtImOZdvaZb1tvGJHheoZ2L3s4LHCnCWhz0gLRmo';
+
+/**
+ * 관리할 폼 ID. 이 값이 있으면 스크립트는 언제나 이 폼 하나만 고쳐 쓴다.
+ * 몇 번을 실행하든 편집 링크 · 배포 링크 · 응답 탭이 전부 그대로 유지되므로,
+ * 링크를 다시 뿌릴 필요가 없다.
+ *
+ * 예전에는 이 ID를 스크립트 속성(QA_FORM_ID)에만 두었는데, 스크립트 속성은 Apps Script
+ * 프로젝트 안에 들어 있어서 코드를 다른 프로젝트에 붙여넣으면 비어 있다. 그 상태로
+ * 실행하면 폼이 새로 만들어지고 응답 탭도 하나 더 생겼다. 파일에 적어 두면 어디에
+ * 붙여넣어도 같은 폼을 가리킨다.
+ *
+ * ID는 편집 주소의 /d/ 와 /edit 사이 문자열이다.
+ * 비워두면('') 예전처럼 스크립트 속성에 기록된 폼을 찾는다.
+ *
+ * 현재 폼 / current form
+ *   편집 https://docs.google.com/forms/d/1c-Xyr3c_Gcrgw06wPfWZKwv0Io000WLMuOGRYqPwCBg/edit
+ *   배포 https://docs.google.com/forms/d/e/1FAIpQLSdU71721oDJEWCgSB13UKIGm8EZdYj7Mp9JTxR7MEWEZna_Ag/viewform
+ *   응답 탭 "원스토어 QA 체크리스트_TEST" (gid 1335290224)
+ */
+var FORM_ID = '1c-Xyr3c_Gcrgw06wPfWZKwv0Io000WLMuOGRYqPwCBg';
 
 /**
  * 재실행 가드.
@@ -158,24 +195,25 @@ function rebuildExistingForm() {
 
 /**
  * 이 스크립트가 관리하는 폼을 연다.
- * 스크립트 속성에 기록이 없으면 응답 스프레드시트에서 역으로 찾아 기록해 둔다.
+ * 위 FORM_ID 를 먼저 보고, 비어 있으면 스크립트 속성 → 응답 스프레드시트 순으로 찾는다.
  */
 function openManagedForm_() {
   var props = PropertiesService.getScriptProperties();
-  var id = props.getProperty(FORM_ID_PROPERTY);
+  var id = FORM_ID || props.getProperty(FORM_ID_PROPERTY);
+  var where = FORM_ID ? '파일의 FORM_ID' : '스크립트 속성 ' + FORM_ID_PROPERTY;
 
   // 기록을 지우지 않는다. 권한 문제로 못 여는 것뿐인데 지워 버리면,
   // 손으로 넣은 속성이 실패할 때마다 날아가 원인 찾기가 더 어려워진다.
   if (id) {
-    Logger.log('스크립트 속성 ' + FORM_ID_PROPERTY + ' = ' + id);
+    Logger.log(where + ' = ' + id);
     try {
       return FormApp.openById(id);
     } catch (e) {
-      Logger.log('기록된 폼을 열지 못했다 / could not open recorded form: ' + id +
-                 '\n  ' + e.message);
+      Logger.log('그 폼을 열지 못했다 / could not open: ' + id + '\n  ' + e.message +
+                 '\n  폼이 휴지통에 있으면 드라이브에서 복원할 것.');
     }
   } else {
-    Logger.log('스크립트 속성 ' + FORM_ID_PROPERTY + ' 이(가) 비어 있다 / property not set');
+    Logger.log('FORM_ID 도 스크립트 속성도 비어 있다 / no form id anywhere');
   }
 
   // 기록이 없거나 못 열면 응답 시트에 연결된 폼을 찾는다.
@@ -210,6 +248,10 @@ function openManagedForm_() {
 // ---------------------------------------------------------------------------
 
 function buildFormItems_(form) {
+  // 제목도 여기서 건다. rebuildExistingForm 은 문항만 갈아끼우므로 이 줄이 없으면
+  // 갱신을 해도 배포된 폼은 예전 제목("QA 체크리스트")을 그대로 달고 있게 된다.
+  // createQaChecklistForm 은 FormApp.create 에서 이미 같은 값을 넣으므로 영향 없다.
+  form.setTitle(FORM_TITLE);
   form.setDescription(FORM_DESCRIPTION);
   form.setProgressBar(true);
   form.setAllowResponseEdits(true);   // 제출 후에도 수정 가능 / responses stay editable
@@ -627,11 +669,25 @@ function paintVerdictColumns_(sheet, verdictCols) {
 /**
  * 이미 만든 폼이 있으면 멈춘다. 없으면 조용히 통과.
  *
- * 기록해 둔 폼이 지워졌거나 열 권한이 없으면 기록을 지우고 통과시킨다 —
- * 죽은 ID 하나 때문에 영영 못 만들게 되는 상황을 피한다.
+ * 기록된 폼을 "열지 못했다"는 이유로 통과시키지 않는다. 폼이 휴지통에 들어가 있거나
+ * 권한이 잠깐 막힌 것뿐인데 새 폼을 만들어 버리면, 그 새 폼이 응답 스프레드시트에
+ * 탭을 하나 더 만들어 응답이 두 곳으로 갈린다. 응답 탭이 자꾸 새로 생기는 원인이
+ * 바로 이 경로였다. 정말 새 폼이 필요할 때 쓰라고 ALLOW_NEW_FORM 이 따로 있다.
  */
 function assertNoExistingForm_() {
   if (ALLOW_NEW_FORM) return;
+
+  // FORM_ID 가 박혀 있으면 새 폼을 만들 이유가 없다. 만드는 순간 편집 링크 · 배포 링크 ·
+  // 응답 탭이 전부 새로 생겨 링크를 다시 뿌려야 한다.
+  if (FORM_ID) {
+    throw new Error(
+      '이 스크립트는 FORM_ID 에 지정된 폼 하나만 고쳐 쓴다: ' + FORM_ID + '\n' +
+      '새로 만들면 편집 링크 · 배포 링크 · 응답 탭이 전부 새로 생긴다.\n' +
+      '\n' +
+      '  · 문항을 고쳤으면 → rebuildExistingForm 실행 (링크와 응답 탭 그대로 유지)\n' +
+      '  · 정말 별개의 폼이 필요하면 → FORM_ID 를 \'\' 로 비우고 ALLOW_NEW_FORM 을 true 로'
+    );
+  }
 
   var props = PropertiesService.getScriptProperties();
   var existingId = props.getProperty(FORM_ID_PROPERTY);
@@ -641,9 +697,15 @@ function assertNoExistingForm_() {
   try {
     existing = FormApp.openById(existingId);
   } catch (e) {
-    Logger.log('기록된 폼을 열 수 없어 기록을 비운다(삭제됐거나 권한 없음): ' + existingId);
-    props.deleteProperty(FORM_ID_PROPERTY);
-    return;
+    throw new Error(
+      '기록된 폼(' + existingId + ')을 열지 못했다: ' + e.message + '\n' +
+      '새 폼을 만들지 않고 멈춘다 — 만들면 응답 탭이 하나 더 생기고 응답이 갈린다.\n' +
+      '\n' +
+      '  · 폼이 휴지통에 있으면   → 드라이브 휴지통에서 복원한 뒤 다시 실행\n' +
+      '  · 폼을 정말 지웠으면     → 스크립트 속성 ' + FORM_ID_PROPERTY + ' 를 비우고 다시 실행\n' +
+      '  · 어느 폼인지 모르겠으면 → listResponseTabs 또는 diagnoseFormAccess 실행\n' +
+      '  · 정말 별개의 폼이 필요하면 → ALLOW_NEW_FORM 을 true 로'
+    );
   }
 
   throw new Error(
@@ -714,13 +776,18 @@ function diagnoseFormAccess() {
   Logger.log('활성 사용자 / active user: ' + (Session.getActiveUser().getEmail() || '(못 읽음)'));
   Logger.log('실행 사용자 / effective user: ' + (Session.getEffectiveUser().getEmail() || '(못 읽음)'));
 
-  Logger.log('=== 2. 스크립트 속성 / script property ===');
+  Logger.log('=== 2. 어느 폼을 쓰기로 돼 있나 / which form is configured ===');
+  Logger.log('파일의 FORM_ID = ' + (FORM_ID ? ('"' + FORM_ID + '"') : '(비어 있음)'));
   var props = PropertiesService.getScriptProperties();
   var all = props.getProperties();
   var names = Object.keys(all);
   Logger.log('등록된 속성 이름 / keys: ' + (names.length ? names.join(', ') : '(하나도 없음)'));
-  var id = props.getProperty(FORM_ID_PROPERTY);
-  Logger.log(FORM_ID_PROPERTY + ' = ' + (id ? ('"' + id + '"  (길이 ' + id.length + ')') : '(비어 있음)'));
+  var propId = props.getProperty(FORM_ID_PROPERTY);
+  Logger.log(FORM_ID_PROPERTY + ' = ' + (propId ? ('"' + propId + '"  (길이 ' + propId.length + ')') : '(비어 있음)'));
+
+  // openManagedForm_ 과 같은 우선순위로 고른다 — 여기서 다른 답이 나오면 진단이 무의미하다.
+  var id = FORM_ID || propId;
+  Logger.log('→ 실제로 열려는 폼 / will open: ' + (id || '(없음)'));
 
   Logger.log('=== 3. 응답 시트에 연결된 폼 / forms linked to the sheet ===');
   var sheets = SpreadsheetApp.openById(RESPONSE_SPREADSHEET_ID).getSheets();
@@ -733,7 +800,8 @@ function diagnoseFormAccess() {
     if (fid) candidates.push(fid);
   }
   if (id && candidates.indexOf(id) === -1) {
-    Logger.log('⚠️ 속성에 넣은 ID가 이 시트에 연결된 폼 목록에 없다. 오타이거나 다른 폼이다.');
+    Logger.log('⚠️ 쓰기로 돼 있는 폼이 이 시트에 연결돼 있지 않다. 오타이거나, 응답이 다른 ' +
+               '스프레드시트로 가고 있거나, 응답 탭이 지워진 것이다.');
   }
 
   Logger.log('=== 4. 열어 보기 / try opening ===');
@@ -754,9 +822,10 @@ function diagnoseFormAccess() {
   }
 
   Logger.log('=== 읽는 법 ===');
-  Logger.log('· 4번에 ✅ 가 하나라도 있으면 → 그 ID를 ' + FORM_ID_PROPERTY + ' 에 넣고 rebuildExistingForm');
+  Logger.log('· 4번에 ✅ 가 하나라도 있으면 → 그 ID를 파일 맨 위 FORM_ID 에 넣고 rebuildExistingForm');
   Logger.log('· 전부 ❌ 이고 소유자가 1번의 실행 계정과 다르면 → 소유자 계정으로 이 스크립트를 실행할 것');
-  Logger.log('· 2번에서 속성이 (비어 있음) 이면 → 프로젝트 설정에서 저장이 안 된 것');
+  Logger.log('· ❌ 사유가 "찾을 수 없음"이면 폼이 휴지통에 있을 수 있다 → 드라이브 휴지통 확인');
+  Logger.log('· 2번에서 FORM_ID 와 속성이 서로 다르면 → FORM_ID 쪽이 이긴다');
 }
 
 /**
