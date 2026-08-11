@@ -112,14 +112,48 @@ var FORM_ID = '1c-Xyr3c_Gcrgw06wPfWZKwv0Io000WLMuOGRYqPwCBg';
 var ALLOW_NEW_FORM = false;
 var FORM_ID_PROPERTY = 'QA_FORM_ID';
 
-var FORM_TITLE = '원스토어 출시 전 게임 점검표 / Pre-release Game Checklist';
+/**
+ * 폼 제목. 슬래시 대신 넓은 공백으로 한국어와 영어를 벌려 놓은 모양이다.
+ *
+ * \u00a0 는 줄바꿈이 일어나지 않는 공백(non-breaking space)이다. 보통 공백을 여러 개
+ * 이어 쓰면 브라우저가 하나로 합쳐 버려 간격이 사라지므로 이것을 쓴다.
+ * 소스에서는 눈으로 세기 어려워 개수를 코드로 드러냈다.
+ */
+var FORM_TITLE = '원스토어 출시 전 게임 점검표' +
+  new Array(12).join('\u00a0 ') +
+  'Pre-release Game Checklist';
 
+/**
+ * 폼 최상단 설명.
+ *
+ * 첫 줄에 자격요건(광고 필수)을 둔다. 15분을 다 채우고 마지막에 탈락시키는 것보다
+ * 첫 화면에서 걸러 주는 편이 제작자에게도 검토팀에도 낫다.
+ */
 var FORM_DESCRIPTION =
-  '게임을 올리기 전에 만드신 분이 직접 확인하는 점검표입니다. ' +
-  '제출하신 게임 주소로 검토팀이 한 번 더 확인합니다.\n' +
-  '실제로 눌러보고 확인한 것만 체크해 주세요. 10~15분 정도 걸립니다.\n\n' +
-  'A self-check by the person who made the game. After you submit, our reviewers open your link ' +
-  'and check it themselves. Only tick what you actually tried. Takes 10-15 minutes.';
+  '⚠️ 이 폼은 광고가 연동된 게임만 접수합니다.\n' +
+  '수익화가 가능한 게임만 원스토어에 노출합니다.\n' +
+  '\n' +
+  '· 게임을 올리기 전에 만드신 분이 직접 확인하는 점검표입니다.\n' +
+  '· 제출하신 게임 주소와 소스 코드로 검토팀이 한 번 더 확인합니다.\n' +
+  '\n' +
+  '· 실제로 눌러보고 확인한 것만 체크해 주세요.\n' +
+  '10~15분 정도 걸립니다.\n' +
+  '\n' +
+  '· 적어 주신 내용이 실제와 다르면 처음부터 다시 검토하게 되어\n' +
+  '출시가 그만큼 늦어집니다.\n' +
+  '한 번에 끝나도록 꼼꼼히 확인하고 제출해 주세요.\n' +
+  '\n' +
+  '⚠️ This form only accepts games with ads integrated.\n' +
+  'Only monetisable games go on the store.\n' +
+  '\n' +
+  '· A self-check by the person who made the game.\n' +
+  '· After you submit, our reviewers open your link\n' +
+  'and read your source code as well.\n' +
+  '\n' +
+  '· Only tick what you actually tried. Takes 10-15 minutes.\n' +
+  '· If what you report does not match the build,\n' +
+  'the review restarts from scratch and your release slips.\n' +
+  'Please check carefully so it passes in one go.';
 
 // ---------------------------------------------------------------------------
 // 진입점 / Entry points
@@ -258,20 +292,42 @@ function buildFormItems_(form) {
   form.setLimitOneResponsePerUser(false);
   form.setShowLinkToRespondAgain(true);
 
+  // 이메일 자동 수집. 구글이 이 설정의 동작을 몇 차례 바꿔서 실패할 수 있으므로
+  // 폼 생성 전체를 죽이지 않도록 감싼다.
+  //
+  // ⚠️ 켜진 뒤 폼 "설정 → 응답 → 이메일 주소 수집"이 어느 값으로 잡혔는지 한 번 볼 것.
+  //    "확인함"이면 응답자가 구글 로그인을 해야 제출할 수 있다. 외부 제작자가
+  //    로그인 없이 내야 한다면 "응답자 입력"으로 손수 바꿔야 한다.
+  try {
+    form.setCollectEmail(true);
+  } catch (e) {
+    Logger.log('이메일 자동 수집을 켜지 못했다 / could not enable email collection: ' + e.message +
+               '\n  폼 설정 화면에서 손으로 켤 것.');
+  }
+
   // 응답 시트의 A열은 타임스탬프. 이후 질문이 추가된 순서대로 한 열씩 차지한다.
   // 판정 문항이 어느 열에 떨어지는지 손으로 세면 문항을 하나 끼워넣을 때마다
   // 조건부 서식이 어긋나므로, 추가하면서 자동으로 기록한다.
-  var colIndex = 1;              // A = 타임스탬프
+  //
+  // 이메일 자동 수집이 켜져 있으면 B열에 "이메일 주소"가 하나 더 들어가고 문항은 그
+  // 다음부터 시작한다. 이 한 칸을 빠뜨리면 조건부 서식이 통째로 한 칸씩 밀린다.
+  // 설정값을 가정하지 않고 폼에 직접 물어본다.
+  var colIndex = form.collectsEmail() ? 2 : 1;   // A = 타임스탬프, (B = 이메일 주소)
   var verdictCols = [];          // 통과/실패 문항이 떨어진 열 번호
 
   var VERDICTS = ['통과 / Pass', '실패 / Fail'];
 
-  /** 통과/실패 판정 문항. 하나의 사실로 판정되는 항목에만 쓴다. */
-  var addVerdict = function (title, help) {
+  /**
+   * 통과/실패 판정 문항. 하나의 사실로 판정되는 항목에만 쓴다.
+   *
+   * choices 를 넘기면 그 선택지를 대신 쓴다(예: 결제처럼 기능 자체가 없을 수 있는 항목).
+   * 조건부 서식은 "Pass"·"Fail" 글자를 찾아 칠하므로, 추가한 선택지는 색이 없는 채로 남는다.
+   */
+  var addVerdict = function (title, help, choices) {
     form.addMultipleChoiceItem()
       .setTitle(title)
       .setHelpText(help)
-      .setChoiceValues(VERDICTS)
+      .setChoiceValues(choices || VERDICTS)
       .setRequired(true);
     colIndex++;
     verdictCols.push(colIndex);
@@ -354,45 +410,130 @@ function buildFormItems_(form) {
   // ======================= 1. 기본 정보 =======================
   addHeader('1. 기본 정보 · Basics');
 
-  addText('게임 이름  ·  Game title', '');
+  addText('게임 이름 · Game title', '');
 
+  // 이메일은 폼 설정의 "이메일 주소 수집"이 맨 위에 필수 문항을 자동으로 넣어 준다.
+  // 여기에 또 두면 응답자가 같은 것을 두 번 적게 되므로 두지 않는다.
+
+  // 선택 문항. 이메일은 기록으로 남기고, 디스코드는 고칠 것이 나왔을 때 바로 주고받는 용도다.
   addText(
-    '이메일  ·  Email',
-    '연락이 필요할 때 답을 받으실 수 있는 주소로 적어 주세요.\n' +
-    'An address where we can reach you if we need to follow up.'
+    '디스코드 아이디 (선택) · Discord ID (optional)',
+    '적어 주시면 고칠 것이 나왔을 때 메일 대신 디스코드로 바로 알려드립니다.\n' +
+    '훨씬 빠릅니다. 안 적으셔도 괜찮습니다. 그때는 맨 위에 적으신 이메일로 연락드립니다.\n' +
+    '\n' +
+    'If you give us your Discord ID we will ping you there instead of emailing.\n' +
+    'Much faster when something needs fixing. Optional. We will use your email otherwise.',
+    false
   );
 
   addText(
-    '게임 주소  ·  Link to the game',
-    '검토팀이 이 주소로 직접 들어가 봅니다. 지금 접속되는 주소여야 합니다.\n' +
-    '내 컴퓨터에서만 열리는 주소(localhost 등)는 확인이 불가능합니다.\n\n' +
-    'The reviewer opens this link. It has to work right now — an address that only opens ' +
-    'on your own computer cannot be checked.'
+    '게임 주소 · Link to the game',
+    '검토팀이 이 주소로 직접 들어가 봅니다.\n' +
+    '지금 접속되는 주소여야 합니다.\n' +
+    '\n' +
+    '내 컴퓨터에서만 열리는 주소(localhost 등)는 확인이 불가능합니다.\n' +
+    '제출하신 게임의 소스 코드도 함께 확인합니다.\n' +
+    '\n' +
+    'The reviewer opens this link. It has to work right now.\n' +
+    'An address that only opens on your own computer cannot be checked.\n' +
+    'We also review your source code.'
+  );
+
+  // 검토팀이 소스 코드를 자동으로 훑기 위한 칸. 플랫폼에서 저장소를 바로 조회할 수
+  // 있게 되면 이 문항은 지우면 된다.
+  addText(
+    'GitLab 저장소 경로 · GitLab repository path',
+    'Verse8 제작 화면의 Git Access에서 clone 명령어를 보시면\n' +
+    'gitlab.verse8.io/ 뒤에 "계정/프로젝트명"이 있습니다.\n' +
+    '그 부분만 적어 주세요.\n' +
+    '\n' +
+    '예: hy.tae90/hexellent\n' +
+    '\n' +
+    '⚠️ glpat- 로 시작하는 Access Token은 절대 붙여넣지 마세요.\n' +
+    '검토팀은 토큰 없이 확인합니다.\n' +
+    '명령어 전체를 복사하면 토큰이 함께 붙으니 주의해 주세요.\n' +
+    '\n' +
+    'In the Git Access panel, your clone command contains\n' +
+    'gitlab.verse8.io/<account>/<project>.\n' +
+    'Paste only that account/project part — e.g. hy.tae90/hexellent.\n' +
+    '\n' +
+    '⚠️ Never paste the glpat- Access Token. Reviewers do not need it.'
   );
 
   // ======================= 2. 화면 =======================
   addHeader('2. 화면 · Display', '휴대폰에서 제대로 보이는지 확인합니다 / How it looks on a phone');
 
   addChecks(
-    '휴대폰에서 화면이 제대로 나오나요?  ·  Does it display correctly on a phone?',
-    '확인한 것만 체크해 주세요. 실제 휴대폰으로 봐주세요 — 컴퓨터 창을 줄이는 것만으로는 ' +
+    '휴대폰에서 화면이 제대로 나오나요?\nDoes it display correctly on a phone?',
+    '확인한 것만 체크해 주세요.\n' +
+    '실제 휴대폰으로 봐주세요 — 컴퓨터 창을 줄이는 것만으로는\n' +
     '안 잡히는 문제가 있습니다.\n' +
-    '자주 나오는 실수: 큰 폰에서만 확인하고 작은 폰을 안 봄.\n\n' +
-    'Tick only what you checked. Use a real phone — shrinking a desktop window hides some problems.',
+    '\n' +
+    '자주 나오는 실수: 큰 폰에서만 확인하고 작은 폰을 안 봄.\n' +
+    '\n' +
+    'Tick only what you checked.\n' +
+    'Use a real phone — shrinking a desktop window hides some problems.',
     [
       '버튼과 글자가 서로 겹치지 않음 / Nothing overlaps',
       '버튼이 있어야 할 자리에 있음 / Buttons sit where they should',
       '글자와 숫자가 또렷함 (뿌옇거나 깨지지 않음) / Text stays sharp',
-      '화면 밖으로 잘려 나간 게 없음 / Nothing is cut off'
+      '화면 밖으로 잘려 나간 게 없음 / Nothing is cut off',
+      '키보드나 마우스 없이 터치만으로 처음부터 끝까지 플레이 가능함 / Playable start to finish with touch only'
     ]
   );
 
+  // 어디서 확인했는지 받는 문항. 이게 있어야 (1) 큰 폰에서만 보고 넘어간 경우가 걸러지고
+  // (2) 검토팀이 문제를 재현할 때 "제작자는 무엇으로 봤는가" 하는 비교 기준이 생긴다.
   addChecks(
-    '처음부터 끝까지 해봤을 때 문제가 없나요?  ·  Does a full play session run cleanly?',
-    '최소 몇 분은 계속 플레이해 주세요. 짧게 몇 번 해보면 시간이 지나야 나타나는 문제를 놓칩니다.\n' +
-    '자주 나오는 실수: 1분 해보고 괜찮다고 판단.\n\n' +
-    'Play for several minutes at least. A few short attempts will not surface problems that ' +
-    'only appear over time.',
+    '어디에서 확인하셨나요?\nWhere did you check?',
+    '직접 확인한 것만 체크해 주세요.\n' +
+    '\n' +
+    '원스토어는 안드로이드 중심이라 안드로이드 확인이 가장 중요합니다.\n' +
+    '안드로이드 기기가 없으시면 최소한 아이폰 웹 브라우저에서라도\n' +
+    '확인해 주세요.\n' +
+    '\n' +
+    '컴퓨터 창을 줄여 보는 것은 실제 휴대폰 확인을 대신하지 못합니다.\n' +
+    '\n' +
+    'Tick only what you actually used.\n' +
+    'ONE store is Android-first, so an Android check matters most.\n' +
+    'If you have no Android device, please at least check on iPhone mobile web.\n' +
+    '\n' +
+    'Shrinking a desktop window does not count as a phone check.',
+    [
+      '안드로이드 폰 + Chrome / Android phone, Chrome',
+      '안드로이드 폰 + 다른 앱 안에서 열리는 브라우저 / Android, in-app browser',
+      '아이폰 + Safari / iPhone, Safari',
+      '아이폰 + 다른 앱 안에서 열리는 브라우저 / iPhone, in-app browser',
+      '태블릿 / Tablet',
+      '컴퓨터 브라우저만 / Desktop browser only'
+    ]
+  );
+
+  addText(
+    '확인에 쓰신 기기 이름\nWhich device did you use?',
+    '모델명을 적어 주세요.\n' +
+    '문제가 생겼을 때 검토팀이 같은 조건으로 맞춰 보기 위한 것입니다.\n' +
+    '\n' +
+    '예: "갤럭시 S23", "아이폰 13 미니", "갤럭시 A34"\n' +
+    '여러 대로 보셨으면 전부 적어 주세요.\n' +
+    '화면이 작은 기기가 있으면 특히 중요합니다.\n' +
+    '\n' +
+    'Give the model name so we can match your conditions.\n' +
+    'e.g. "Galaxy S23", "iPhone 13 mini"\n' +
+    '\n' +
+    'List all of them if you used more than one.\n' +
+    'Small-screen devices matter most.'
+  );
+
+  addChecks(
+    '처음부터 끝까지 해봤을 때 문제가 없나요?\nDoes a full play session run cleanly?',
+    '최소 몇 분은 계속 플레이해 주세요.\n' +
+    '짧게 몇 번 해보면 시간이 지나야 나타나는 문제를 놓칩니다.\n' +
+    '\n' +
+    '자주 나오는 실수: 1분 해보고 괜찮다고 판단.\n' +
+    '\n' +
+    'Play for several minutes at least.\n' +
+    'A few short attempts will not surface problems that only appear over time.',
     [
       '처음부터 끝까지 한 판을 끝내 봤음 / Played one full run',
       '오래 할수록 점점 느려지지 않음 / Does not get slower over time',
@@ -405,11 +546,18 @@ function buildFormItems_(form) {
   addHeader('3. 광고 · Ads');
 
   addChecks(
-    '게임에 광고와 결제가 들어가 있나요?  ·  Are ads or purchases in the game?',
-    '있는 것만 체크해 주세요. 둘 다 있어야 하는 것은 아닙니다.\n' +
-    '코드에만 있고 화면에 안 보이면 없는 것과 같습니다. 실제로 눌러보고 체크해 주세요.\n\n' +
-    'Tick whichever the game has — it does not need both. If it exists in code but not on ' +
-    'screen, it does not count. Press it in the real build.',
+    '게임에 광고와 결제가 들어가 있나요?\nAre ads or purchases in the game?',
+    '광고는 필수입니다. 결제는 선택입니다.\n' +
+    '광고가 붙어있지 않은 게임은 접수되지 않습니다.\n' +
+    '\n' +
+    '코드에만 있고 화면에 안 보이면 없는 것과 같습니다.\n' +
+    '실제로 눌러보고 체크해 주세요.\n' +
+    '\n' +
+    'Ads are required. Purchases are optional.\n' +
+    'Games without ads are not accepted.\n' +
+    '\n' +
+    'If it exists in code but not on screen, it does not count.\n' +
+    'Press it in the real build.',
     [
       '광고를 보는 버튼이 있음 (예: "광고 보고 이어하기") / There is an ad button',
       '결제하는 곳이 있음 (예: 상점, 구매 버튼) / There is a place to buy'
@@ -419,17 +567,21 @@ function buildFormItems_(form) {
   addImage(
     typeof IMG_AD_EXAMPLE !== 'undefined' ? IMG_AD_EXAMPLE : null,
     'ad_example',
-    '실제 예시 — 상점 안의 광고 보상 버튼(빨간 동그라미) / Example — a rewarded-ad button inside a shop'
+    '실제 예시 — 상점 안의 광고 보상 버튼(빨간 동그라미)\n' +
+    'Example — a rewarded-ad button inside a shop'
   );
 
   addText(
-    '광고 버튼과 결제 버튼은 어디에 있나요?  ·  Where are they?',
-    '검토팀이 찾아 들어갈 수 있게 위치를 적어 주세요. 있는 것만 적으시면 됩니다.\n' +
+    '광고 버튼과 결제 버튼은 어디에 있나요?\nWhere are they?',
+    '검토팀이 찾아 들어갈 수 있게 위치를 적어 주세요.\n' +
+    '있는 것만 적으시면 됩니다.\n' +
+    '\n' +
     '예)\n' +
     '· 광고 — 게임 오버 화면의 "부활하기" 버튼\n' +
     '· 광고 — 게임 오버 화면의 "시간 늘리기" 버튼\n' +
     '· 광고 — 상점이나 메인 화면의 "골드 더 받기" 버튼\n' +
-    '· 결제 — 상점 안의 유료 상품\n\n' +
+    '· 결제 — 상점 안의 유료 상품\n' +
+    '\n' +
     'List only what the game actually has. e.g.\n' +
     '· Ad — "Revive" button on the game-over screen\n' +
     '· Ad — "Add time" button on the game-over screen\n' +
@@ -437,53 +589,110 @@ function buildFormItems_(form) {
     '· Purchase — paid items in the shop'
   );
 
+  // 전면광고는 유저가 누르지 않았는데 저절로 뜨는 광고라 보상형과 성격이 다르다.
+  // 언제 뜨는지 미리 받아 두어야 검토팀이 재현할 수 있다.
+  addChoice(
+    '화면 전체를 덮는 광고가 있나요?\nAre there full-screen (interstitial) ads?',
+    '유저가 누르지 않았는데 저절로 떠서 화면 전체를 가리는 광고를 말합니다.\n' +
+    '보통 판이 끝났을 때나 다음 화면으로 넘어갈 때 나옵니다.\n' +
+    '앞에서 말한 "광고 보고 이어하기" 같은 버튼형 광고와는 다른 것입니다.\n' +
+    '\n' +
+    'Ads that appear on their own and cover the whole screen.\n' +
+    'Usually between rounds or screen changes.\n' +
+    'Different from the button-triggered rewarded ads above.',
+    ['있음 / Yes', '없음 / No']
+  );
+
+  addText(
+    '그 광고는 언제 나오나요?\nWhen do they appear?',
+    '위에서 "있음"을 고르셨으면 언제 뜨는지 적어 주세요.\n' +
+    '검토팀이 같은 상황을 만들어 확인합니다.\n' +
+    '\n' +
+    '예: "판이 끝날 때마다", "3판에 한 번", "메인 화면으로 돌아갈 때"\n' +
+    '없으면 "없음"이라고 적어 주세요.\n' +
+    '\n' +
+    'If you answered Yes, say when they show up so we can reproduce it.\n' +
+    'e.g. "after every round", "every third round", "when returning to the main screen"\n' +
+    'Write "none" if there are none.'
+  );
+
   addVerdict(
-    '광고를 끝까지 보면 보상이 제대로 들어오나요?  ·  Does watching an ad give the reward?',
+    '광고를 끝까지 보면 보상이 제대로 들어오나요?\nDoes watching an ad give the reward?',
     '아래 셋을 모두 만족해야 통과입니다.\n' +
     '· 끝까지 보면 보상이 들어옴\n' +
     '· 중간에 닫으면 보상이 안 들어옴\n' +
     '· 중간에 닫아도 불이익은 없음 (다시 도전 가능)\n' +
-    '실제 배포된 주소에서 확인해 주세요. 만드는 중인 화면에서는 광고가 아예 안 나옵니다.\n\n' +
-    'Pass only if all three hold: a full watch gives the reward, closing early gives nothing, ' +
-    'and closing early costs nothing either. Check on the deployed link — ads do not run in a ' +
-    'local or development environment.'
+    '\n' +
+    '실제 배포된 주소에서 확인해 주세요.\n' +
+    '만드는 중인 화면에서는 광고가 아예 안 나옵니다.\n' +
+    '\n' +
+    'Pass only if all three hold:\n' +
+    '· a full watch gives the reward\n' +
+    '· closing early gives nothing\n' +
+    '· closing early costs nothing either\n' +
+    '\n' +
+    'Check on the deployed link.\n' +
+    'Ads do not run in a local or development environment.'
   );
 
   // 타임아웃 문항. 개발을 모르는 제작자가 대부분이므로 "타임아웃"이 무슨 말인지부터
   // 풀어 쓰고, 고치는 방법(AI에게 그대로 붙여넣을 문장)까지 한 문항 안에 담는다.
   // 여기서 설명을 아끼면 뜻을 모른 채 통과로 찍고 넘어간다.
   addVerdict(
-    '광고 타임아웃을 120초로 설정하셨나요?  ·  Is the ad timeout set to 120 seconds?',
+    '광고 타임아웃을 120초로 설정하셨나요?\nIs the ad timeout set to 120 seconds?',
     '[이게 무슨 말인가요]\n' +
-    '유저가 광고를 보기 시작하면 그 순간부터 시간이 흐릅니다. 정해진 시간 안에 광고를 ' +
-    '다 보고 닫기 버튼까지 누르지 못하면, 그 광고는 "안 본 것"으로 처리되어 보상이 ' +
-    '들어가지 않습니다. 이 제한 시간을 타임아웃이라 부르고, 120초로 잡아야 합니다.\n\n' +
+    '\n' +
+    '유저가 광고를 보기 시작하면 그 순간부터 시간이 흐릅니다.\n' +
+    '정해진 시간 안에 광고를 다 보고 닫기 버튼까지 누르지 못하면,\n' +
+    '그 광고는 "안 본 것"으로 처리되어 보상이 들어가지 않습니다.\n' +
+    '이 제한 시간을 타임아웃이라 부르고, 120초로 잡아야 합니다.\n' +
+    '\n' +
     '[왜 120초인가요]\n' +
-    '이 값이 짧으면 광고를 끝까지 성실히 본 유저도 시간이 모자라 보상을 못 받습니다. ' +
-    '광고 길이는 저마다 다르고, 닫기 버튼을 누르기까지 몇 초가 더 걸리기도 합니다. ' +
-    '120초는 그 여유까지 감안한 기준값입니다.\n\n' +
+    '\n' +
+    '이 값이 짧으면 광고를 끝까지 성실히 본 유저도\n' +
+    '시간이 모자라 보상을 못 받습니다.\n' +
+    '광고 길이는 저마다 다르고, 닫기 버튼을 누르기까지\n' +
+    '몇 초가 더 걸리기도 합니다.\n' +
+    '120초는 그 여유까지 감안한 기준값입니다.\n' +
+    '\n' +
     '[안 돼 있으면 — 고치는 법]\n' +
-    'Verse8 SDK를 쓰신다면 광고를 띄우는 부분에 timeoutMs 값을 넣으면 됩니다.\n' +
-    '    Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 })\n' +
-    '단위는 밀리초라서 120_000 이 120초입니다.\n\n' +
-    '코드를 직접 만지지 않으셨다면, 게임을 만들 때 쓰신 AI에게 아래 문장을 그대로 ' +
-    '붙여넣으세요.\n' +
-    '"Verse8 SDK에서 광고 timeout 설정값을 ' +
-    'Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 }) 으로 변경해줘"\n\n' +
+    '\n' +
+    'Verse8 SDK를 쓰신다면 광고를 띄우는 부분에\n' +
+    'timeoutMs 값을 넣으면 됩니다.\n' +
+    '\n' +
+    'Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 })\n' +
+    '단위는 밀리초라서 120_000 이 120초입니다.\n' +
+    '코드를 직접 만지지 않으셨다면, 게임을 만들 때 쓰신 AI에게\n' +
+    '아래 문장을 그대로 붙여넣으세요.\n' +
+    '\n' +
+    '"Verse8 SDK에서 광고 timeout 설정값을\n' +
+    'Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 })\n' +
+    '으로 변경해줘"\n' +
+    '\n' +
     '[What this means]\n' +
-    'The clock starts the moment a player begins watching an ad. If they do not finish the ad ' +
-    'and press the close button within the allotted time, the ad counts as unwatched and no ' +
-    'reward is granted. That limit is the timeout, and it must be set to 120 seconds.\n\n' +
+    '\n' +
+    'The clock starts the moment a player begins watching an ad.\n' +
+    'If they do not finish the ad and press the close button in time,\n' +
+    'the ad counts as unwatched and no reward is granted.\n' +
+    'That limit is the timeout, and it must be set to 120 seconds.\n' +
+    '\n' +
     '[Why 120 seconds]\n' +
-    'Set it too low and players who genuinely watched the whole ad still lose the reward. ' +
-    'Ad lengths vary, and pressing the close button takes a few seconds more. 120 seconds ' +
-    'is the figure that leaves room for both.\n\n' +
+    '\n' +
+    'Set it too low and players who genuinely watched the whole ad\n' +
+    'still lose the reward.\n' +
+    'Ad lengths vary, and pressing the close button takes a few seconds more.\n' +
+    '120 seconds is the figure that leaves room for both.\n' +
+    '\n' +
     '[How to fix]\n' +
+    '\n' +
     'On the Verse8 SDK, pass timeoutMs where you show the ad:\n' +
-    '    Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 })\n' +
-    'The unit is milliseconds, so 120_000 is 120 seconds.\n\n' +
-    'If you did not write the code yourself, paste this to the AI you built the game with:\n' +
-    '"Change the Verse8 SDK ad timeout to ' +
+    'Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 })\n' +
+    'The unit is milliseconds, so 120_000 is 120 seconds.\n' +
+    '\n' +
+    'If you did not write the code yourself, paste this to the AI\n' +
+    'you built the game with:\n' +
+    '\n' +
+    '"Change the Verse8 SDK ad timeout to\n' +
     'Verse8Ads.showRewarded({ placementId, timeoutMs: 120_000 })"'
   );
 
@@ -491,51 +700,88 @@ function buildFormItems_(form) {
   addHeader('4. 저장과 결제 · Saving and payments');
 
   addChecks(
-    '게임 기록이 계정에 저장되나요?  ·  Is progress saved to the account?',
-    '기기에만 저장되면 폰을 바꾸거나 다시 설치할 때 기록이 전부 사라집니다.\n' +
-    '자주 나오는 실수: 순위표에는 점수가 있는데 화면의 \'최고 기록\'은 0으로 나오는 경우 — ' +
-    '둘은 따로 저장돼 있을 수 있으니 각각 확인해 주세요.\n\n' +
-    'Device-only saves are lost on a new phone or a reinstall. Rankings and the on-screen best ' +
-    'score can be stored separately — check both.',
+    '게임 기록이 계정에 저장되나요?\nIs progress saved to the account?',
+    '기기에만 저장되면 폰을 바꾸거나 다시 설치할 때\n' +
+    '기록이 전부 사라집니다.\n' +
+    '\n' +
+    '자주 나오는 실수: 순위표에는 점수가 있는데\n' +
+    '화면의 \'최고 기록\'은 0으로 나오는 경우.\n' +
+    '둘은 따로 저장돼 있을 수 있으니 각각 확인해 주세요.\n' +
+    '\n' +
+    'Device-only saves are lost on a new phone or a reinstall.\n' +
+    'Rankings and the on-screen best score can be stored separately.\n' +
+    'Check both.',
     [
       '컴퓨터에서 올린 기록이 휴대폰에서도 보임 / PC to phone carries over',
       '휴대폰에서 올린 기록이 컴퓨터에서도 보임 / Phone to PC carries over',
-      '화면의 \'최고 기록\'도 기기를 바꿔도 유지됨 / On-screen best score survives too',
-      '순위표에 다른 사람 기록도 함께 나옴 / Leaderboard shows other players'
+      '화면의 \'최고 기록\'도 기기를 바꿔도 유지됨 / On-screen best score survives too'
     ]
   );
 
+  // 리더보드는 노출 순위에 직접 영향을 주는데 예전에는 위 체크박스 넷 중 하나로 묻혀
+  // 있었다. 그래서 제작자가 "없으면 불리하다"는 사실을 알 기회조차 없었다. 따로 뺀다.
+  addChoice(
+    '순위표(리더보드)가 있나요?\nIs there a leaderboard?',
+    '순위표가 없는 단판 게임은 원스토어 노출 우선순위에서 밀립니다.\n' +
+    '있다고 답하셨으면, 다른 사람 기록도 함께 나오는지 확인해 주세요.\n' +
+    '내 기록만 보이면 순위표가 아닙니다.\n' +
+    '\n' +
+    'Games without a leaderboard rank lower in store placement.\n' +
+    'If you have one, check that other players\' scores show up too.\n' +
+    'Your own score alone is not a leaderboard.',
+    ['있음 / Yes', '없음 / No']
+  );
+
   addText(
-    '기기 두 개로 어떻게 확인하셨나요?  ·  How did you check across two devices?',
-    '예: "컴퓨터에서 레벨 5까지 올린 뒤 휴대폰으로 접속하니 레벨 5로 나옴"\n\n' +
-    'e.g. "Reached level 5 on a PC, then opened it on a phone and it was still level 5."'
+    '기기 두 개로 어떻게 확인하셨나요?\nHow did you check across two devices?',
+    '예: "컴퓨터에서 레벨 5까지 올린 뒤\n' +
+    '휴대폰으로 접속하니 레벨 5로 나옴"\n' +
+    '\n' +
+    'e.g. "Reached level 5 on a PC, then opened it on a phone\n' +
+    'and it was still level 5."'
   );
 
   addImage(
     typeof IMG_PURCHASE_EXAMPLE !== 'undefined' ? IMG_PURCHASE_EXAMPLE : null,
     'purchase_example',
-    '실제 예시 — 구매 버튼을 눌렀을 때 떠야 하는 결제창 / Example — the checkout that must open on buy'
+    '실제 예시 — 구매 버튼을 눌렀을 때 떠야 하는 결제창\n' +
+    'Example — the checkout that must open on buy'
   );
 
+  // 광고와 달리 결제는 선택이므로 "결제 기능 없음"을 둔다. 이건 확인을 건너뛰는
+  // 통로가 아니라 실제로 항목이 성립하지 않는 경우다.
   addVerdict(
-    '결제 버튼을 누르면 결제창이 뜨나요?  ·  Does the checkout open when you press buy?',
+    '결제 버튼을 누르면 결제창이 뜨나요?\nDoes the checkout open when you press buy?',
     '아래 둘을 모두 만족해야 통과입니다.\n' +
     '· 상품이 여러 개면 전부 눌러봤고, 모두 결제창이 떴음\n' +
-    '· 결제한 재화가 계정에 남아 기기를 바꿔도 유지됨\n\n' +
-    'Pass only if both hold: checkout opened for every product you pressed, and purchased ' +
-    'currency stays on the account across a device change.'
+    '· 결제한 재화가 계정에 남아 기기를 바꿔도 유지됨\n' +
+    '\n' +
+    '결제 기능을 아예 넣지 않으셨다면 "결제 기능 없음"을 고르시면 됩니다.\n' +
+    '결제는 선택입니다.\n' +
+    '\n' +
+    'Pass only if both hold:\n' +
+    '· checkout opened for every product you pressed\n' +
+    '· purchased currency stays on the account across a device change\n' +
+    '\n' +
+    'Pick "No purchases" if the game has none.\n' +
+    'Purchases are optional.',
+    ['통과 / Pass', '실패 / Fail', '결제 기능 없음 / No purchases']
   );
 
   addText(
-    '결제 상품이 몇 개인가요?  ·  How many purchase items are there?',
-    ''
+    '결제 상품이 몇 개인가요?\nHow many purchase items are there?',
+    '숫자로 적어 주세요.\n' +
+    '결제 기능이 없으면 0 이라고 적으시면 됩니다.\n' +
+    '\n' +
+    'A number.\n' +
+    'Write 0 if the game has no purchases.'
   );
 
   // ======================= 5. 스토어 등록 정보 =======================
   addHeader('5. 스토어 등록 정보 · Store listing');
 
   addChecks(
-    '게임 설명을 한국어와 영어 둘 다 넣으셨나요?  ·  Is the description filled in both languages?',
+    '게임 설명을 한국어와 영어 둘 다 넣으셨나요?\nIs the description filled in both languages?',
     '',
     [
       '한국어 설명을 넣었음 / Korean description filled',
@@ -547,32 +793,43 @@ function buildFormItems_(form) {
   addHeader('6. 화면 방향과 언어 · Orientation and language');
 
   addChoice(
-    '이 게임은 어느 방향으로 하는 게임인가요?  ·  Which orientation is this game for?',
-    '다음 문항에서 실제 동작이 이 선택과 맞는지 확인합니다. 검토팀도 이 선언을 기준으로 ' +
-    '직접 돌려 봅니다.\n\n' +
+    '이 게임은 어느 방향으로 하는 게임인가요?\nWhich orientation is this game for?',
+    '다음 문항에서 실제 동작이 이 선택과 맞는지 확인합니다.\n' +
+    '검토팀도 이 선언을 기준으로 직접 돌려 봅니다.\n' +
+    '\n' +
     'The next question checks whether the build actually behaves this way.',
     ['세로로만 / Portrait only', '가로로만 / Landscape only', '둘 다 가능 / Both']
   );
 
   addVerdict(
-    '실제로도 그렇게 동작하나요?  ·  Does the build actually behave that way?',
-    '세로 전용이라고 하셨으면 — 폰을 가로로 돌려도 화면이 세로로 고정돼야 합니다.\n' +
-    '둘 다 가능이라고 하셨으면 — 돌렸을 때 버튼과 글자가 각 방향에 맞게 다시 배치돼야 합니다.\n\n' +
+    '실제로도 그렇게 동작하나요?\nDoes the build actually behave that way?',
+    '세로 전용이라고 하셨으면 —\n' +
+    '폰을 가로로 돌려도 화면이 세로로 고정돼야 합니다.\n' +
+    '\n' +
+    '둘 다 가능이라고 하셨으면 —\n' +
+    '돌렸을 때 버튼과 글자가 각 방향에 맞게 다시 배치돼야 합니다.\n' +
+    '\n' +
     'Rotate the device and confirm it matches what you declared above.'
   );
 
   addImage(
     typeof IMG_LANGUAGE !== 'undefined' ? IMG_LANGUAGE : null,
     'language',
-    '참고 그림 — 언어를 바꾸면 글자 길이도 바뀐다 / Reference — switching language changes layout'
+    '참고 그림 — 언어를 바꾸면 글자 길이도 바뀐다\n' +
+    'Reference — switching language changes layout'
   );
 
   addChecks(
-    '게임 안 글자가 한국어와 영어 둘 다 나오나요?  ·  Does in-game text work in both languages?',
-    '위 5번과 다른 항목입니다. 그건 스토어 소개글, 이건 게임 안에서 보이는 글자입니다.\n' +
+    '게임 안 글자가 한국어와 영어 둘 다 나오나요?\nDoes in-game text work in both languages?',
+    '위 5번과 다른 항목입니다.\n' +
+    '그건 스토어 소개글, 이건 게임 안에서 보이는 글자입니다.\n' +
     '메인 화면만 보지 마시고 팝업 · 결과 화면 · 상점까지 다 봐주세요.\n' +
-    '자주 나오는 실수: 언어를 바꾸면 글자 길이가 달라져서, 한쪽 언어에서만 버튼 글자가 잘리는 경우.\n\n' +
-    'Different from item 5 — that is the store listing, this is the text inside the game. ' +
+    '\n' +
+    '자주 나오는 실수: 언어를 바꾸면 글자 길이가 달라져서,\n' +
+    '한쪽 언어에서만 버튼 글자가 잘리는 경우.\n' +
+    '\n' +
+    'Different from item 5 — that is the store listing,\n' +
+    'this is the text inside the game.\n' +
     'Walk through popups, results and the shop too.',
     [
       '한국어로 하면 모든 화면이 한국어 / Korean is complete everywhere',
@@ -582,10 +839,13 @@ function buildFormItems_(form) {
   );
 
   addText(
-    '언어는 어디서 바꾸나요?  ·  Where is the language switch?',
-    '예: "메인 화면 오른쪽 위 KR/EN 버튼", "설정 메뉴 안의 언어 설정"\n' +
-    '자동으로 휴대폰 언어를 따라간다면 그렇게 적어 주세요.\n\n' +
-    'e.g. "KR/EN toggle, top-right of the main screen" or "Language option inside Settings". ' +
+    '언어는 어디서 바꾸나요?\nWhere is the language switch?',
+    '예: "메인 화면 오른쪽 위 KR/EN 버튼"\n' +
+    '예: "설정 메뉴 안의 언어 설정"\n' +
+    '자동으로 휴대폰 언어를 따라간다면 그렇게 적어 주세요.\n' +
+    '\n' +
+    'e.g. "KR/EN toggle, top-right of the main screen"\n' +
+    'e.g. "Language option inside Settings"\n' +
     'If it follows the device language, say so.'
   );
 
@@ -593,9 +853,11 @@ function buildFormItems_(form) {
   addHeader('7. 마무리 · Wrap-up');
 
   addParagraph(
-    '그 밖에 알려주실 것  ·  Anything else we should know',
+    '그 밖에 알려주실 것\nAnything else we should know',
     '예: 특정 기기에서만 생기는 문제, 아직 작업 중인 부분.\n' +
-    'e.g. a problem that only happens on one device, or work still in progress.',
+    '\n' +
+    'e.g. a problem that only happens on one device,\n' +
+    'or work still in progress.',
     false
   );
 
@@ -603,18 +865,28 @@ function buildFormItems_(form) {
   // 겁을 줘서 전부 체크하게 만들면 폼이 무의미해지므로, 불이익이 "확인을 안 한 것"이
   // 아니라 "확인한 것처럼 적은 것"에 붙는다는 점을 분명히 한다.
   addHeader(
-    '⚠️ 제출 전에 한 번만 더 읽어 주세요  ·  Before you submit',
-    '제출해 주신 내용은 검토팀이 게임에 직접 들어가 하나씩 대조합니다. ' +
-    '확인하지 않은 항목을 체크하셨거나 내용이 실제와 다르면 이 단계에서 드러납니다.\n\n' +
+    '⚠️ 제출 전에 한 번만 더 읽어 주세요\nBefore you submit',
+    '제출해 주신 내용은 검토팀이 게임에 직접 들어가 하나씩 대조합니다.\n' +
+    '확인하지 않은 항목을 체크하셨거나 내용이 실제와 다르면\n' +
+    '이 단계에서 드러납니다.\n' +
+    '\n' +
     '· 재검수 대상이 되어 출시 일정이 밀립니다\n' +
-    '· 같은 일이 반복되면 스토어 노출 순위에서 후순위로 밀릴 수 있습니다\n\n' +
-    '확인하지 못한 항목이 있어도 괜찮습니다. 체크를 비워 두고 제출하셔도 됩니다 — ' +
-    '불이익은 확인을 안 한 것이 아니라, 확인한 것처럼 적은 것에 붙습니다.\n\n' +
-    'Our reviewers open your game and check these answers one by one. Ticking something you did ' +
-    'not actually verify will surface here — it sends the build back for re-review and delays your ' +
-    'release, and repeated cases can push your game down in store placement. It is fine to leave a ' +
-    'box unticked and submit as is. The penalty is for claiming a check you did not do, not for ' +
-    'the missing check itself.'
+    '· 같은 일이 반복되면 스토어 노출 순위에서 후순위로 밀릴 수 있습니다\n' +
+    '\n' +
+    '확인하지 못한 항목이 있어도 괜찮습니다.\n' +
+    '체크를 비워 두고 제출하셔도 됩니다.\n' +
+    '불이익은 확인을 안 한 것이 아니라,\n' +
+    '확인한 것처럼 적은 것에 붙습니다.\n' +
+    '\n' +
+    'Our reviewers open your game and check these answers one by one.\n' +
+    'Ticking something you did not actually verify will surface here.\n' +
+    '\n' +
+    '· It sends the build back for re-review and delays your release\n' +
+    '· Repeated cases can push your game down in store placement\n' +
+    '\n' +
+    'It is fine to leave a box unticked and submit as is.\n' +
+    'The penalty is for claiming a check you did not do,\n' +
+    'not for the missing check itself.'
   );
 
   return verdictCols;
