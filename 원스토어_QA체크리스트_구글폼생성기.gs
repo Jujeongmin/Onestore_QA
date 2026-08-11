@@ -41,6 +41,26 @@
  *       편집 링크 · 배포 링크 · 응답 탭이 그대로라서 링크를 다시 뿌릴 필요가 없다.
  *       (createQaChecklistForm 은 폼을 통째로 새로 만드는 함수라 FORM_ID 가
  *        박혀 있는 동안에는 실행되지 않고 막힌다)
+ *
+ * ---------------------------------------------------------------------------
+ * 코드 ↔ 폼 왕복 / Round trip between code and form
+ *
+ * 코드에서 고친 것을 폼으로   → rebuildExistingForm
+ * 폼에서 손으로 고친 것을 코드로 → dumpFormAsCode  (읽기만 한다. 출력을 붙여넣으면 된다)
+ *
+ * rebuildExistingForm 은 이제 문항을 전부 지우지 않는다. 같은 자리에 같은 종류의 문항이
+ * 있으면 그대로 쓰고, 값이 실제로 다른 항목만 고친다. 그래서 문항 하나만 손봐도
+ * 나머지 문항은 건드리지 않는다.
+ *
+ * 이게 중요한 이유: 폼에서 손으로 넣은 **굵게는 API로 읽지도 쓰지도 못한다.**
+ * Apps Script 도 Forms REST API 도 제목이 평문 문자열이라 서식 필드가 아예 없다.
+ * 서식이 살아남는 유일한 조건은 "그 문항을 건드리지 않는 것"이고, 지금 구조가 그것이다.
+ * 다만 제목 글자 자체를 바꾼 문항은 그 하나만 굵게가 풀린다 — 그건 손으로 다시 입혀야 한다.
+ *
+ * 폼에서 크게 손봤다면 순서는 이렇다.
+ *   dumpFormAsCode 실행 → 출력을 buildFormItems_ 에 붙여넣기 →
+ *   rebuildExistingForm 실행 → 로그에 "바뀐 것 없음" 이 뜨면 코드와 폼이 일치한다
+ * ---------------------------------------------------------------------------
  *  4. 최초 1회 권한 승인 (Google 폼 + 스프레드시트 생성 권한)
  *  5. 실행 로그에 나오는 링크 확인
  *
@@ -198,21 +218,20 @@ function createQaChecklistForm() {
  * 연결도 유지된다. 문항을 고쳤을 때 쓰는 함수는 이것이다 —
  * createQaChecklistForm 을 다시 돌리면 폼이 하나 더 생긴다.
  *
- * ⚠️ 기존 문항을 전부 지우고 새로 넣는다. 그래서
- *  - 응답 스프레드시트에 이미 쌓인 데이터는 그대로 남는다 (열도 지워지지 않는다)
- *  - 다만 새 문항은 시트 오른쪽에 새 열로 붙는다. 문항 이름이 바뀌었으면
- *    예전 열과 새 열이 나란히 생겨 시트가 넓어진다.
- *  - 폼 안에 저장된 기존 응답에서는 지워진 문항의 답이 사라진다.
- * 실제 응답이 쌓이기 전에 돌리는 것이 가장 깔끔하다.
+ * 예전에는 문항을 전부 지우고 새로 넣었다. 그러면 폼에서 손으로 넣은 굵게가 통째로
+ * 날아갔다. 지금은 **바뀐 것만 고친다** — 같은 자리에 같은 종류의 문항이 있으면 그것을
+ * 그대로 쓰고, 값이 실제로 다른 항목에만 setter 를 부른다. 자세한 것은 buildFormItems_ 안의
+ * "제자리 수정" 설명 참고.
+ *
+ * ⚠️ 그래도 남는 제약
+ *  - 제목 글자 자체를 바꾼 문항은 그 하나만 굵게가 풀린다. 서식은 API로 읽지도 쓰지도
+ *    못해서(구글 제한) 다시 입혀 줄 방법이 없다. 그 문항만 손으로 다시 굵게 하면 된다.
+ *  - 문항 이름이 바뀌면 응답 시트 오른쪽에 새 열이 붙어 시트가 넓어진다.
+ *  - 폼에서 손으로 고친 문구는 코드 값으로 되돌아간다. 손으로 고친 것을 살리려면
+ *    먼저 dumpFormAsCode 로 뽑아 코드에 반영할 것.
  */
 function rebuildExistingForm() {
   var form = openManagedForm_();
-
-  var items = form.getItems();
-  for (var i = items.length - 1; i >= 0; i--) {
-    form.deleteItem(items[i]);
-  }
-  Logger.log('기존 문항 ' + items.length + '개 삭제 / removed ' + items.length + ' items');
 
   var verdictCols = buildFormItems_(form);
 
@@ -317,6 +336,66 @@ function buildFormItems_(form) {
 
   var VERDICTS = ['통과 / Pass', '실패 / Fail'];
 
+  // ---------------------------------------------------------------------
+  // 제자리 수정 / in-place sync
+  //
+  // 예전에는 rebuildExistingForm 이 문항을 전부 지우고 처음부터 다시 넣었다. 그래서
+  // 문항 하나만 고쳐도 모든 문항이 새로 태어났고, 폼에서 손으로 넣은 굵게가 통째로
+  // 날아갔다. 굵게 같은 서식은 Apps Script 로도 Forms REST API 로도 읽거나 쓸 수 없다
+  // (양쪽 다 title 이 평문 문자열이다). 즉 서식을 살리는 방법은 "건드리지 않는 것"뿐이다.
+  //
+  // 그래서 아래 add* 는 이제 "추가"가 아니라 "맞추기"로 동작한다.
+  //   · 같은 자리에 같은 종류의 문항이 이미 있으면 그것을 그대로 쓴다
+  //   · 값이 실제로 다른 항목에만 setter 를 부른다
+  //   · 제목 글자가 그대로면 setTitle 을 아예 부르지 않는다  ← 굵게가 살아남는 지점
+  // 스펙보다 뒤에 남은 문항은 맨 끝에서 지운다.
+  //
+  // 남는 제약: 제목 글자를 바꾼 문항은 그 하나만 서식이 풀린다. 어쩔 수 없다.
+  // ---------------------------------------------------------------------
+  var existing = form.getItems();
+  var cursor = 0;              // 지금 맞춰 보고 있는 자리
+  var changes = [];            // 실제로 무엇을 고쳤는지. 마지막에 로그로 찍는다
+
+  var firstLine = function (s) { return String(s || '').split('\n')[0]; };
+
+  /** cursor 자리의 문항을 확보한다. 종류가 맞으면 재사용, 아니면 새로 만들어 끼워넣는다. */
+  var slot = function (type) {
+    var it = existing[cursor];
+    if (it && it.getType() === type) { cursor++; return it; }
+    var created = newItemOfType_(form, type);   // 새 문항은 항상 맨 뒤에 붙는다
+    form.moveItem(created.getIndex(), cursor);  // 제자리로 옮긴다
+    existing.splice(cursor, 0, created);        // 우리 목록도 같이 맞춘다
+    cursor++;
+    changes.push('추가 · ' + type);
+    return created;
+  };
+
+  var putTitle = function (item, title) {
+    if (item.getTitle() === title) return;      // 같으면 손대지 않는다 (서식 보존)
+    item.setTitle(title);
+    changes.push('제목 · ' + firstLine(title));
+  };
+
+  var putHelp = function (item, help) {
+    var want = help || '';
+    if (item.getHelpText() === want) return;
+    item.setHelpText(want);
+    changes.push('설명 · ' + firstLine(item.getTitle()));
+  };
+
+  var putRequired = function (item, required) {
+    if (item.isRequired() === required) return;
+    item.setRequired(required);
+    changes.push('필수여부 · ' + firstLine(item.getTitle()));
+  };
+
+  var putChoices = function (item, values) {
+    var now = item.getChoices().map(function (c) { return c.getValue(); });
+    if (now.length === values.length && now.every(function (v, i) { return v === values[i]; })) return;
+    item.setChoiceValues(values);
+    changes.push('선택지 · ' + firstLine(item.getTitle()));
+  };
+
   /**
    * 통과/실패 판정 문항. 하나의 사실로 판정되는 항목에만 쓴다.
    *
@@ -324,22 +403,22 @@ function buildFormItems_(form) {
    * 조건부 서식은 "Pass"·"Fail" 글자를 찾아 칠하므로, 추가한 선택지는 색이 없는 채로 남는다.
    */
   var addVerdict = function (title, help, choices) {
-    form.addMultipleChoiceItem()
-      .setTitle(title)
-      .setHelpText(help)
-      .setChoiceValues(choices || VERDICTS)
-      .setRequired(true);
+    var it = slot(FormApp.ItemType.MULTIPLE_CHOICE).asMultipleChoiceItem();
+    putTitle(it, title);
+    putHelp(it, help);
+    putChoices(it, choices || VERDICTS);
+    putRequired(it, true);
     colIndex++;
     verdictCols.push(colIndex);
   };
 
   /** 선택지가 따로 있는 객관식(방향 모드 등). 판정이 아니라 색칠하지 않는다. */
   var addChoice = function (title, help, choices) {
-    form.addMultipleChoiceItem()
-      .setTitle(title)
-      .setHelpText(help)
-      .setChoiceValues(choices)
-      .setRequired(true);
+    var it = slot(FormApp.ItemType.MULTIPLE_CHOICE).asMultipleChoiceItem();
+    putTitle(it, title);
+    putHelp(it, help);
+    putChoices(it, choices);
+    putRequired(it, true);
     colIndex++;
   };
 
@@ -349,35 +428,36 @@ function buildFormItems_(form) {
    * 비워 둔 체크는 그대로 비운 채 제출된다.
    */
   var addChecks = function (title, help, options) {
-    form.addCheckboxItem()
-      .setTitle(title)
-      .setHelpText(help)
-      .setChoiceValues(options)
-      .setRequired(false);
+    var it = slot(FormApp.ItemType.CHECKBOX).asCheckboxItem();
+    putTitle(it, title);
+    putHelp(it, help);
+    putChoices(it, options);
+    putRequired(it, false);
     colIndex++;
   };
 
   /** 짧은 서술 칸 */
   var addText = function (title, help, required) {
-    form.addTextItem()
-      .setTitle(title)
-      .setHelpText(help)
-      .setRequired(required !== false);
+    var it = slot(FormApp.ItemType.TEXT).asTextItem();
+    putTitle(it, title);
+    putHelp(it, help);
+    putRequired(it, required !== false);
     colIndex++;
   };
 
   var addParagraph = function (title, help, required) {
-    form.addParagraphTextItem()
-      .setTitle(title)
-      .setHelpText(help)
-      .setRequired(!!required);
+    var it = slot(FormApp.ItemType.PARAGRAPH_TEXT).asParagraphTextItem();
+    putTitle(it, title);
+    putHelp(it, help);
+    putRequired(it, !!required);
     colIndex++;
   };
 
   var addHeader = function (title, help) {
-    var h = form.addSectionHeaderItem().setTitle(title);
-    if (help) h.setHelpText(help);
-    // 섹션 헤더는 열을 차지하지 않는다.
+    var it = slot(FormApp.ItemType.SECTION_HEADER).asSectionHeaderItem();
+    putTitle(it, title);
+    putHelp(it, help);
+    // 섹션 헤더는 열을 차지하지 않는다. 필수여부도 없다.
   };
 
   /**
@@ -386,12 +466,21 @@ function buildFormItems_(form) {
    *
    * base64는 이미지데이터.gs 에 들어 있다. 그 파일을 안 붙여넣었으면 상수가
    * 정의되지 않으므로(typeof 검사) 그림만 빠지고 폼 생성은 그대로 진행된다.
+   *
+   * 이미 같은 자리에 그림이 있으면 그림 자체는 다시 올리지 않는다. 올려둔 이미지가
+   * 코드의 base64 와 같은지 비교할 방법이 없어서, 매번 올리면 쓸데없이 새 파일이
+   * 생기고 실행도 느려진다. 그림을 바꿨으면 폼에서 그 항목만 지우고 다시 돌릴 것.
    */
   var addImage = function (b64, name, altTitle) {
     if (!b64) {
       Logger.log('이미지 건너뜀 / image skipped: ' + name + ' (이미지데이터 파일 미포함)');
       return;
     }
+    var reused = existing[cursor] && existing[cursor].getType() === FormApp.ItemType.IMAGE;
+    var it = slot(FormApp.ItemType.IMAGE).asImageItem();
+    putTitle(it, altTitle);
+    if (reused) return;
+
     // base64 앞머리로 형식을 가린다. JPEG는 /9j/, PNG는 iVBOR 로 시작한다.
     // 다이어그램은 PNG, 실제 화면 캡처는 JPEG(용량이 훨씬 작다)로 들어 있다.
     var isJpeg = b64.indexOf('/9j/') === 0;
@@ -400,9 +489,7 @@ function buildFormItems_(form) {
       isJpeg ? 'image/jpeg' : 'image/png',
       name + (isJpeg ? '.jpg' : '.png')
     );
-    form.addImageItem()
-      .setImage(blob)
-      .setTitle(altTitle)
+    it.setImage(blob)
       .setAlignment(FormApp.Alignment.CENTER)
       .setWidth(600);
   };
@@ -904,7 +991,36 @@ function buildFormItems_(form) {
     'not for the missing check itself.'
   );
 
+  // 스펙보다 뒤에 남아 있는 문항은 이제 쓰지 않는 것이므로 지운다.
+  // 뒤에서부터 지워야 인덱스가 밀리지 않는다.
+  for (var k = existing.length - 1; k >= cursor; k--) {
+    changes.push('삭제 · ' + firstLine(existing[k].getTitle()));
+    form.deleteItem(existing[k]);
+  }
+
+  if (changes.length) {
+    Logger.log('바뀐 것 ' + changes.length + '건 / ' + changes.length + ' changes:\n  ' +
+               changes.join('\n  '));
+  } else {
+    Logger.log('바뀐 것 없음 — 폼이 이미 코드와 같다 / no changes, form already matches code');
+  }
+
   return verdictCols;
+}
+
+/**
+ * slot() 이 쓰는 보조. 종류에 맞는 빈 문항을 폼 맨 뒤에 만든다.
+ */
+function newItemOfType_(form, type) {
+  switch (type) {
+    case FormApp.ItemType.MULTIPLE_CHOICE: return form.addMultipleChoiceItem();
+    case FormApp.ItemType.CHECKBOX:        return form.addCheckboxItem();
+    case FormApp.ItemType.TEXT:            return form.addTextItem();
+    case FormApp.ItemType.PARAGRAPH_TEXT:  return form.addParagraphTextItem();
+    case FormApp.ItemType.SECTION_HEADER:  return form.addSectionHeaderItem();
+    case FormApp.ItemType.IMAGE:           return form.addImageItem();
+    default: throw new Error('처리하지 않는 문항 종류: ' + type);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -1049,6 +1165,110 @@ function listResponseTabs() {
   Logger.log('폼 제목이 "열지 못함"으로 나와도 폼 ID는 그대로 쓸 수 있다. ' +
              '스크립트 속성 ' + FORM_ID_PROPERTY + ' 에 넣고 rebuildExistingForm 을 돌려 볼 것 — ' +
              '거기서도 막히면 그때가 진짜 권한 문제다.');
+}
+
+/**
+ * 지금 폼에 들어 있는 문항을 읽어서, buildFormItems_ 에 붙여넣을 코드로 뽑아 준다.
+ * 폼을 읽기만 하고 아무것도 바꾸지 않는다.
+ *
+ * 쓰는 때
+ *   폼 편집 화면에서 문구를 손으로 고쳤을 때. 그대로 두면 다음 rebuildExistingForm 에
+ *   코드 값으로 되돌아가므로, 이 함수로 뽑아 코드에 반영해 두어야 한다.
+ *
+ * 쓰는 법
+ *   1. dumpFormAsCode 실행
+ *   2. 실행 로그에 찍힌 코드를 복사
+ *   3. buildFormItems_ 의 "1. 기본 정보" 부터 마지막 addHeader 까지를 그것으로 교체
+ *   4. rebuildExistingForm 을 돌려 "바뀐 것 없음" 이 나오면 코드와 폼이 일치한다
+ *
+ * ⚠️ 굵게 같은 글자 서식은 뽑히지 않는다. Apps Script 도 Forms REST API 도 서식을
+ *    읽는 방법이 없다(양쪽 다 제목이 평문 문자열이다). 서식은 폼에서만 산다.
+ * ⚠️ 그림(addImage)은 base64 를 되뽑지 않고 자리만 표시해 둔다. 그림 데이터는
+ *    원스토어_QA체크리스트_이미지데이터.gs 에 그대로 있으므로 그 줄은 손대지 말 것.
+ */
+function dumpFormAsCode() {
+  var form = openManagedForm_();
+  var items = form.getItems();
+
+  Logger.log('=== 아래를 복사해 buildFormItems_ 의 문항 부분에 붙여넣으세요 ===');
+  Logger.log('=== 폼 제목/설명은 파일 위쪽 FORM_TITLE · FORM_DESCRIPTION 에 있습니다 ===');
+  Logger.log('폼 제목 현재값 / current form title:\n' + jsStr_(form.getTitle()));
+  Logger.log('폼 설명 현재값 / current form description:\n' + jsStr_(form.getDescription()));
+
+  for (var i = 0; i < items.length; i++) {
+    var it = items[i];
+    var t = it.getType();
+    var block;
+
+    if (t === FormApp.ItemType.SECTION_HEADER) {
+      var h = it.asSectionHeaderItem();
+      block = 'addHeader(\n  ' + jsStr_(h.getTitle()) +
+              (h.getHelpText() ? ',\n  ' + jsStr_(h.getHelpText()) : '') + '\n);';
+
+    } else if (t === FormApp.ItemType.IMAGE) {
+      block = '// addImage(...) — 그림 자리. 원래 코드의 addImage 줄을 그대로 두세요.\n' +
+              '//   제목: ' + it.getTitle().replace(/\n/g, ' / ');
+
+    } else if (t === FormApp.ItemType.TEXT) {
+      var x = it.asTextItem();
+      block = 'addText(\n  ' + jsStr_(x.getTitle()) + ',\n  ' + jsStr_(x.getHelpText()) +
+              (x.isRequired() ? '' : ',\n  false') + '\n);';
+
+    } else if (t === FormApp.ItemType.PARAGRAPH_TEXT) {
+      var p = it.asParagraphTextItem();
+      block = 'addParagraph(\n  ' + jsStr_(p.getTitle()) + ',\n  ' + jsStr_(p.getHelpText()) +
+              ',\n  ' + (p.isRequired() ? 'true' : 'false') + '\n);';
+
+    } else if (t === FormApp.ItemType.CHECKBOX) {
+      var c = it.asCheckboxItem();
+      block = 'addChecks(\n  ' + jsStr_(c.getTitle()) + ',\n  ' + jsStr_(c.getHelpText()) +
+              ',\n  ' + choiceArray_(c) + '\n);';
+
+    } else if (t === FormApp.ItemType.MULTIPLE_CHOICE) {
+      var m = it.asMultipleChoiceItem();
+      var vals = m.getChoices().map(function (ch) { return ch.getValue(); });
+      // 통과/실패 문항은 addVerdict, 그 밖의 객관식은 addChoice 로 되돌린다.
+      var isVerdict = vals.some(function (v) { return v.indexOf('Pass') !== -1; });
+      if (isVerdict) {
+        var isDefault = vals.length === 2 &&
+                        vals[0].indexOf('Pass') !== -1 && vals[1].indexOf('Fail') !== -1;
+        block = 'addVerdict(\n  ' + jsStr_(m.getTitle()) + ',\n  ' + jsStr_(m.getHelpText()) +
+                (isDefault ? '' : ',\n  ' + choiceArray_(m)) + '\n);';
+      } else {
+        block = 'addChoice(\n  ' + jsStr_(m.getTitle()) + ',\n  ' + jsStr_(m.getHelpText()) +
+                ',\n  ' + choiceArray_(m) + '\n);';
+      }
+
+    } else {
+      block = '// ⚠️ 이 스크립트가 다루지 않는 문항 종류: ' + t + ' — "' + it.getTitle() + '"';
+    }
+
+    // 로그 한 줄이 너무 길면 잘리므로 문항마다 따로 찍는다.
+    Logger.log('[' + (i + 1) + '/' + items.length + ']\n' + block);
+  }
+
+  Logger.log('=== 끝. 굵게는 포함되지 않습니다 — 폼에서 손으로 다시 입혀야 합니다 ===');
+}
+
+/**
+ * 문자열을 그대로 코드에 붙여넣을 수 있는 자바스크립트 리터럴로 만든다.
+ * 줄바꿈은 \n 으로 바꾸고 줄마다 끊어 이어 붙여, 소스에서도 문단 모양이 보이게 한다.
+ */
+function jsStr_(s) {
+  if (s === null || s === undefined || s === '') return "''";
+  var lines = String(s).split('\n');
+  var out = [];
+  for (var i = 0; i < lines.length; i++) {
+    var esc = lines[i].replace(/\\/g, '\\\\').replace(/'/g, "\\'");
+    out.push("'" + esc + (i < lines.length - 1 ? '\\n' : '') + "'");
+  }
+  return out.join(' +\n  ');
+}
+
+/** 선택지를 ['a', 'b'] 꼴의 코드로 만든다. */
+function choiceArray_(item) {
+  var vals = item.getChoices().map(function (c) { return jsStr_(c.getValue()); });
+  return '[\n    ' + vals.join(',\n    ') + '\n  ]';
 }
 
 /**
