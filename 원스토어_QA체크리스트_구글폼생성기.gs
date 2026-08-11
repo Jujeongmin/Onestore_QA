@@ -439,6 +439,12 @@ function buildFormItems_(form) {
     'We also review your source code.'
   );
 
+  addImage(
+    typeof IMG_GAMELINK_EXAMPLE !== 'undefined' ? IMG_GAMELINK_EXAMPLE : null,
+    'gamelink_example',
+    '어디서 복사하나요 — Share 창의 Copy Link / Where to copy it — Copy Link in the Share dialog'
+  );
+
   // 검토팀이 소스 코드를 자동으로 훑기 위한 칸. 플랫폼에서 저장소를 바로 조회할 수
   // 있게 되면 이 문항은 지우면 된다.
   addText(
@@ -458,6 +464,15 @@ function buildFormItems_(form) {
     'Paste only that account/project part — e.g. hy.tae90/hexellent.\n' +
     '\n' +
     '⚠️ Never paste the glpat- Access Token. Reviewers do not need it.'
+  );
+
+  // 위 경고를 글로만 두면 잘 안 읽힌다. 실제 화면에서 어느 부분이 저장소 경로이고
+  // 어느 부분이 토큰인지 눈으로 갈라 보이게 그림을 함께 깐다.
+  addImage(
+    typeof IMG_GITLAB_EXAMPLE !== 'undefined' ? IMG_GITLAB_EXAMPLE : null,
+    'gitlab_example',
+    '어디서 찾나요 — ⋮ 메뉴의 Git Access. 빨간 네모 부분만 적으세요(검게 가린 곳이 토큰) / ' +
+    'Where to find it — Git Access in the ⋮ menu. Copy only the boxed part; the blacked-out area is the token'
   );
 
   // ======================= 2. 화면 =======================
